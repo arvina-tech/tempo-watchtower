@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alloy::primitives::{Address, Bytes, TxKind, U256, keccak256};
 use alloy::signers::SignerSync;
@@ -24,6 +24,10 @@ use tempo_watchtower::rpc::RpcManager;
 use tempo_watchtower::scheduler;
 use tempo_watchtower::state::AppState;
 
+static E2E_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+const CHAIN_ID: u64 = 42431;
+
 #[derive(Clone, Default)]
 struct RpcState {
     seen_raw: Arc<Mutex<Vec<String>>>,
@@ -31,6 +35,202 @@ struct RpcState {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn e2e_signed_tx_is_broadcast() -> anyhow::Result<()> {
+    let _guard = acquire_e2e_lock().await;
+    let (api_addr, rpc_state) = setup_e2e().await?;
+    let raw_tx = build_signed_tx()?;
+
+    send_signed_tx(&api_addr, &raw_tx).await?;
+
+    wait_for_raw(&rpc_state, &raw_tx).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn e2e_signed_tx_with_valid_after_is_broadcast() -> anyhow::Result<()> {
+    let _guard = acquire_e2e_lock().await;
+    let (api_addr, rpc_state) = setup_e2e().await?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let raw_tx = build_signed_tx_with_valid_after(Some(now + 2))?;
+
+    send_signed_tx(&api_addr, &raw_tx).await?;
+
+    assert_not_broadcast_within(&rpc_state, &raw_tx, Duration::from_secs(1)).await?;
+    wait_for_raw_with_deadline(&rpc_state, &raw_tx, Duration::from_secs(6)).await?;
+
+    Ok(())
+}
+
+async fn send_signed_tx(api_addr: &SocketAddr, raw_tx: &str) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{api_addr}/v1/transactions"))
+        .json(&serde_json::json!({
+            "chainId": CHAIN_ID,
+            "transactions": [raw_tx]
+        }))
+        .send()
+        .await?;
+
+    assert!(resp.status().is_success());
+
+    Ok(())
+}
+
+async fn start_fake_rpc() -> anyhow::Result<(SocketAddr, RpcState)> {
+    let state = RpcState::default();
+    let app = Router::new()
+        .route("/", post(rpc_handler))
+        .with_state(state.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("rpc server failed");
+    });
+
+    Ok((addr, state))
+}
+
+async fn rpc_handler(
+    axum::extract::State(state): axum::extract::State<RpcState>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let id = payload.get("id").cloned().unwrap_or(Value::from(1));
+    let method = payload
+        .get("method")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let params = payload
+        .get("params")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let result = match method {
+        "eth_sendRawTransaction" => {
+            let raw = params
+                .first()
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if !raw.is_empty() {
+                state.seen_raw.lock().await.push(raw.clone());
+            }
+            json_hex_hash(&raw)
+        }
+        "eth_chainId" => Value::from("0xa5bf"),
+        "eth_getTransactionCount" => Value::from("0x0"),
+        "eth_getTransactionReceipt" => Value::Null,
+        "web3_clientVersion" => Value::from("tempo-watchtower-test"),
+        _ => Value::Null,
+    };
+
+    Json(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    }))
+}
+
+fn json_hex_hash(raw: &str) -> Value {
+    let raw = raw.strip_prefix("0x").unwrap_or(raw);
+    let bytes = hex::decode(raw).unwrap_or_default();
+    let hash = keccak256(&bytes);
+    Value::from(format!("0x{}", hex::encode(hash)))
+}
+
+async fn wait_for_raw(state: &RpcState, expected: &str) -> anyhow::Result<()> {
+    wait_for_raw_with_deadline(state, expected, Duration::from_secs(5)).await
+}
+
+async fn wait_for_raw_with_deadline(
+    state: &RpcState,
+    expected: &str,
+    deadline: Duration,
+) -> anyhow::Result<()> {
+    let expected = expected.to_string();
+
+    timeout(deadline, async {
+        loop {
+            let seen = state.seen_raw.lock().await;
+            if seen.iter().any(|raw| raw == &expected) {
+                return;
+            }
+            drop(seen);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for broadcast"))?;
+
+    Ok(())
+}
+
+async fn assert_not_broadcast_within(
+    state: &RpcState,
+    expected: &str,
+    window: Duration,
+) -> anyhow::Result<()> {
+    let expected = expected.to_string();
+    let early = timeout(window, async {
+        loop {
+            let seen = state.seen_raw.lock().await;
+            if seen.iter().any(|raw| raw == &expected) {
+                return true;
+            }
+            drop(seen);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+
+    if early.is_ok() {
+        anyhow::bail!("broadcast occurred before valid_after");
+    }
+
+    Ok(())
+}
+
+fn build_signed_tx() -> anyhow::Result<String> {
+    build_signed_tx_with_valid_after(None)
+}
+
+fn build_signed_tx_with_valid_after(valid_after: Option<u64>) -> anyhow::Result<String> {
+    let signer = PrivateKeySigner::random();
+    let call = Call {
+        to: TxKind::Call(Address::ZERO),
+        value: U256::ZERO,
+        input: Bytes::default(),
+    };
+
+    let tx = TempoTransaction {
+        chain_id: 42431,
+        fee_token: None,
+        max_priority_fee_per_gas: 1,
+        max_fee_per_gas: 1,
+        gas_limit: 21000,
+        calls: vec![call],
+        access_list: alloy::rpc::types::AccessList::default(),
+        nonce_key: U256::ZERO,
+        nonce: 0,
+        fee_payer_signature: None,
+        valid_before: None,
+        valid_after,
+        key_authorization: None,
+        tempo_authorization_list: Vec::new(),
+    };
+
+    let signature = signer.sign_hash_sync(&tx.signature_hash())?;
+    let tempo_sig = TempoSignature::Primitive(PrimitiveSignature::Secp256k1(signature));
+    let signed: AASigned = tx.into_signed(tempo_sig);
+
+    let mut buf = Vec::new();
+    signed.eip2718_encode(&mut buf);
+
+    Ok(format!("0x{}", hex::encode(buf)))
+}
+
+async fn setup_e2e() -> anyhow::Result<(SocketAddr, RpcState)> {
     dotenvy::dotenv().ok();
 
     let db_url = env_var("DB_USER")
@@ -103,147 +303,21 @@ async fn e2e_signed_tx_is_broadcast() -> anyhow::Result<()> {
 
     scheduler::start(state.clone());
 
-    let app = api::router(state.clone());
+    let app = api::router(state);
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let api_addr = listener.local_addr()?;
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("api server failed");
     });
 
-    let raw_tx = build_signed_tx()?;
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("http://{api_addr}/v1/transactions"))
-        .json(&serde_json::json!({
-            "chainId": 42431,
-            "transactions": [raw_tx.clone()]
-        }))
-        .send()
-        .await?;
-
-    assert!(resp.status().is_success());
-
-    wait_for_raw(&rpc_state, &raw_tx).await?;
-
-    Ok(())
+    Ok((api_addr, rpc_state))
 }
 
-async fn start_fake_rpc() -> anyhow::Result<(SocketAddr, RpcState)> {
-    let state = RpcState::default();
-    let app = Router::new()
-        .route("/", post(rpc_handler))
-        .with_state(state.clone());
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("rpc server failed");
-    });
-
-    Ok((addr, state))
-}
-
-async fn rpc_handler(
-    axum::extract::State(state): axum::extract::State<RpcState>,
-    Json(payload): Json<Value>,
-) -> Json<Value> {
-    let id = payload.get("id").cloned().unwrap_or(Value::from(1));
-    let method = payload
-        .get("method")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    let params = payload
-        .get("params")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let result = match method {
-        "eth_sendRawTransaction" => {
-            let raw = params
-                .first()
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_string();
-            if !raw.is_empty() {
-                state.seen_raw.lock().await.push(raw.clone());
-            }
-            json_hex_hash(&raw)
-        }
-        "eth_chainId" => Value::from("0xa5bf"),
-        "eth_getTransactionCount" => Value::from("0x0"),
-        "eth_getTransactionReceipt" => Value::Null,
-        "web3_clientVersion" => Value::from("tempo-watchtower-test"),
-        _ => Value::Null,
-    };
-
-    Json(serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": result,
-    }))
-}
-
-fn json_hex_hash(raw: &str) -> Value {
-    let raw = raw.strip_prefix("0x").unwrap_or(raw);
-    let bytes = hex::decode(raw).unwrap_or_default();
-    let hash = keccak256(&bytes);
-    Value::from(format!("0x{}", hex::encode(hash)))
-}
-
-async fn wait_for_raw(state: &RpcState, expected: &str) -> anyhow::Result<()> {
-    let expected = expected.to_string();
-    let deadline = Duration::from_secs(5);
-
-    timeout(deadline, async {
-        loop {
-            let seen = state.seen_raw.lock().await;
-            if seen.iter().any(|raw| raw == &expected) {
-                return;
-            }
-            drop(seen);
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("timed out waiting for broadcast"))?;
-
-    Ok(())
-}
-
-fn build_signed_tx() -> anyhow::Result<String> {
-    let signer = PrivateKeySigner::random();
-    let call = Call {
-        to: TxKind::Call(Address::ZERO),
-        value: U256::ZERO,
-        input: Bytes::default(),
-    };
-
-    let tx = TempoTransaction {
-        chain_id: 42431,
-        fee_token: None,
-        max_priority_fee_per_gas: 1,
-        max_fee_per_gas: 1,
-        gas_limit: 21000,
-        calls: vec![call],
-        access_list: alloy::rpc::types::AccessList::default(),
-        nonce_key: U256::ZERO,
-        nonce: 0,
-        fee_payer_signature: None,
-        valid_before: None,
-        valid_after: None,
-        key_authorization: None,
-        tempo_authorization_list: Vec::new(),
-    };
-
-    let signature = signer.sign_hash_sync(&tx.signature_hash())?;
-    let tempo_sig = TempoSignature::Primitive(PrimitiveSignature::Secp256k1(signature));
-    let signed: AASigned = tx.into_signed(tempo_sig);
-
-    let mut buf = Vec::new();
-    signed.eip2718_encode(&mut buf);
-
-    Ok(format!("0x{}", hex::encode(buf)))
+async fn acquire_e2e_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    E2E_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
 }
 
 fn env_var(key: &str) -> Option<String> {
