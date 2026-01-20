@@ -1,0 +1,359 @@
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use sqlx::{PgPool, Postgres, QueryBuilder};
+
+use crate::models::{NewTx, TxRecord, TxStatus};
+
+pub async fn connect(url: &str) -> Result<PgPool> {
+    Ok(PgPool::connect(url).await?)
+}
+
+pub async fn migrate(pool: &PgPool) -> Result<()> {
+    sqlx::migrate!().run(pool).await?;
+    Ok(())
+}
+
+pub async fn insert_tx(pool: &PgPool, tx: &NewTx) -> Result<(TxRecord, bool)> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO txs (
+            chain_id, tx_hash, raw_tx, sender, fee_payer, nonce_key, nonce,
+            valid_after, valid_before, eligible_at, expires_at, status,
+            group_id, group_aux, group_version, next_action_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11, $12,
+            $13, $14, $15, $16
+        )
+        ON CONFLICT (chain_id, tx_hash) DO NOTHING
+        "#,
+    )
+    .bind(tx.chain_id)
+    .bind(&tx.tx_hash)
+    .bind(&tx.raw_tx)
+    .bind(&tx.sender)
+    .bind(&tx.fee_payer)
+    .bind(&tx.nonce_key)
+    .bind(tx.nonce)
+    .bind(tx.valid_after)
+    .bind(tx.valid_before)
+    .bind(tx.eligible_at)
+    .bind(tx.expires_at)
+    .bind(&tx.status)
+    .bind(&tx.group_id)
+    .bind(&tx.group_aux)
+    .bind(tx.group_version)
+    .bind(tx.next_action_at)
+    .execute(pool)
+    .await?;
+
+    let already_known = result.rows_affected() == 0;
+    let record = sqlx::query_as::<_, TxRecord>(
+        "SELECT * FROM txs WHERE chain_id = $1 AND tx_hash = $2",
+    )
+    .bind(tx.chain_id)
+    .bind(&tx.tx_hash)
+    .fetch_one(pool)
+    .await?;
+
+    Ok((record, already_known))
+}
+
+pub async fn get_tx_by_hash(
+    pool: &PgPool,
+    chain_id: Option<i64>,
+    tx_hash: &[u8],
+) -> Result<Option<TxRecord>> {
+    let record = if let Some(chain_id) = chain_id {
+        sqlx::query_as::<_, TxRecord>(
+            "SELECT * FROM txs WHERE chain_id = $1 AND tx_hash = $2",
+        )
+        .bind(chain_id)
+        .bind(tx_hash)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, TxRecord>(
+            "SELECT * FROM txs WHERE tx_hash = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(tx_hash)
+        .fetch_optional(pool)
+        .await?
+    };
+
+    Ok(record)
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct TxFilters {
+    pub chain_id: Option<i64>,
+    pub sender: Option<Vec<u8>>,
+    pub group_id: Option<Vec<u8>>,
+    pub status: Option<String>,
+    pub limit: i64,
+}
+
+pub async fn list_txs(pool: &PgPool, filters: TxFilters) -> Result<Vec<TxRecord>> {
+    let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM txs WHERE 1=1");
+
+    if let Some(chain_id) = filters.chain_id {
+        qb.push(" AND chain_id = ").push_bind(chain_id);
+    }
+    if let Some(sender) = filters.sender {
+        qb.push(" AND sender = ").push_bind(sender);
+    }
+    if let Some(group_id) = filters.group_id {
+        qb.push(" AND group_id = ").push_bind(group_id);
+    }
+    if let Some(status) = filters.status {
+        qb.push(" AND status = ").push_bind(status);
+    }
+
+    let limit = if filters.limit <= 0 { 100 } else { filters.limit };
+    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+
+    let records = qb.build_query_as().fetch_all(pool).await?;
+    Ok(records)
+}
+
+pub async fn list_active_txs(pool: &PgPool, chain_id: i64) -> Result<Vec<TxRecord>> {
+    let rows = sqlx::query_as::<_, TxRecord>(
+        r#"
+        SELECT *
+        FROM txs
+        WHERE chain_id = $1
+          AND status IN ($2, $3, $4)
+        ORDER BY next_action_at ASC NULLS LAST, created_at ASC
+        "#,
+    )
+    .bind(chain_id)
+    .bind(TxStatus::Queued.as_str())
+    .bind(TxStatus::Broadcasting.as_str())
+    .bind(TxStatus::RetryScheduled.as_str())
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+pub async fn get_group_txs(
+    pool: &PgPool,
+    sender: &[u8],
+    group_id: &[u8],
+    chain_id: Option<i64>,
+) -> Result<Vec<TxRecord>> {
+    let mut qb = QueryBuilder::<Postgres>::new(
+        "SELECT * FROM txs WHERE sender = ",
+    );
+    qb.push_bind(sender);
+    qb.push(" AND group_id = ").push_bind(group_id);
+    if let Some(chain_id) = chain_id {
+        qb.push(" AND chain_id = ").push_bind(chain_id);
+    }
+    qb.push(" ORDER BY nonce ASC");
+
+    let rows = qb.build_query_as().fetch_all(pool).await?;
+    Ok(rows)
+}
+
+pub async fn cancel_group(pool: &PgPool, sender: &[u8], group_id: &[u8]) -> Result<Vec<TxRecord>> {
+    let rows = sqlx::query_as::<_, TxRecord>(
+        r#"
+        UPDATE txs
+        SET status = $1,
+            raw_tx = NULL,
+            next_action_at = NULL,
+            lease_owner = NULL,
+            lease_until = NULL,
+            updated_at = NOW()
+        WHERE sender = $2 AND group_id = $3
+        RETURNING *
+        "#,
+    )
+    .bind(TxStatus::CanceledLocally.as_str())
+    .bind(sender)
+    .bind(group_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+pub async fn lease_due_txs(
+    pool: &PgPool,
+    chain_id: i64,
+    now: DateTime<Utc>,
+    lease_owner: &str,
+    lease_until: DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<TxRecord>> {
+    let rows = sqlx::query_as::<_, TxRecord>(
+        r#"
+        WITH due AS (
+            SELECT id
+            FROM txs
+            WHERE chain_id = $1
+              AND status IN ($2, $3)
+              AND next_action_at <= $4
+              AND (lease_until IS NULL OR lease_until < $4)
+            ORDER BY next_action_at ASC
+            LIMIT $5
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE txs
+        SET status = $6,
+            lease_owner = $7,
+            lease_until = $8,
+            updated_at = NOW()
+        WHERE id IN (SELECT id FROM due)
+        RETURNING *
+        "#,
+    )
+    .bind(chain_id)
+    .bind(TxStatus::Queued.as_str())
+    .bind(TxStatus::RetryScheduled.as_str())
+    .bind(now)
+    .bind(limit)
+    .bind(TxStatus::Broadcasting.as_str())
+    .bind(lease_owner)
+    .bind(lease_until)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+pub async fn lease_tx_by_hash(
+    pool: &PgPool,
+    chain_id: i64,
+    tx_hash: &[u8],
+    now: DateTime<Utc>,
+    lease_owner: &str,
+    lease_until: DateTime<Utc>,
+) -> Result<Option<TxRecord>> {
+    let row = sqlx::query_as::<_, TxRecord>(
+        r#"
+        UPDATE txs
+        SET status = $1,
+            lease_owner = $2,
+            lease_until = $3,
+            updated_at = NOW()
+        WHERE chain_id = $4
+          AND tx_hash = $5
+          AND status IN ($6, $7)
+          AND next_action_at <= $8
+          AND (lease_until IS NULL OR lease_until < $8)
+        RETURNING *
+        "#,
+    )
+    .bind(TxStatus::Broadcasting.as_str())
+    .bind(lease_owner)
+    .bind(lease_until)
+    .bind(chain_id)
+    .bind(tx_hash)
+    .bind(TxStatus::Queued.as_str())
+    .bind(TxStatus::RetryScheduled.as_str())
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row)
+}
+
+pub async fn reschedule_tx(
+    pool: &PgPool,
+    id: i64,
+    status: &str,
+    next_action_at: DateTime<Utc>,
+    attempts: i32,
+    last_error: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE txs
+        SET status = $1,
+            next_action_at = $2,
+            attempts = $3,
+            last_error = $4,
+            last_broadcast_at = NOW(),
+            lease_owner = NULL,
+            lease_until = NULL,
+            updated_at = NOW()
+        WHERE id = $5
+        "#,
+    )
+    .bind(status)
+    .bind(next_action_at)
+    .bind(attempts)
+    .bind(last_error)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn mark_terminal(
+    pool: &PgPool,
+    id: i64,
+    status: &str,
+    last_error: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE txs
+        SET status = $1,
+            last_error = $2,
+            next_action_at = NULL,
+            lease_owner = NULL,
+            lease_until = NULL,
+            updated_at = NOW()
+        WHERE id = $3
+        "#,
+    )
+    .bind(status)
+    .bind(last_error)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn mark_executed(
+    pool: &PgPool,
+    id: i64,
+    receipt: serde_json::Value,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE txs
+        SET status = $1,
+            receipt = $2,
+            next_action_at = NULL,
+            lease_owner = NULL,
+            lease_until = NULL,
+            updated_at = NOW()
+        WHERE id = $3
+        "#,
+    )
+    .bind(TxStatus::Executed.as_str())
+    .bind(receipt)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn mark_expired(pool: &PgPool, id: i64) -> Result<()> {
+    mark_terminal(pool, id, TxStatus::Expired.as_str(), None).await
+}
+
+pub async fn mark_invalid(pool: &PgPool, id: i64, reason: &str) -> Result<()> {
+    mark_terminal(pool, id, TxStatus::Invalid.as_str(), Some(reason)).await
+}
+
+pub async fn mark_stale_by_nonce(pool: &PgPool, id: i64) -> Result<()> {
+    mark_terminal(pool, id, TxStatus::StaleByNonce.as_str(), None).await
+}

@@ -1,0 +1,31 @@
+[server]
+bind = "0.0.0.0:8080"
+
+[database]
+url = "postgres://${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+
+[redis]
+url = "redis://${REDIS_HOST}:${REDIS_PORT}/${REDIS_DB}"
+
+[rpc]
+# Per-chain RPC endpoints. Keys are chain IDs.
+[rpc.chains]
+"42431" = ["${RPC_URLS}"]
+
+[scheduler]
+poll_interval_ms = 200
+lease_ttl_seconds = 30
+max_concurrency = 50
+retry_min_ms = 250
+retry_max_ms = 5000
+
+[broadcaster]
+fanout = 2
+timeout_ms = 2000
+
+[watcher]
+poll_interval_ms = 1500
+use_websocket = true
+
+[api]
+max_body_bytes = 1048576
