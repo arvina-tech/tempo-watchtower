@@ -86,12 +86,20 @@ Grouping is encoded inside the 32-byte TIP-20 `memo` field using a structured co
 ### 5.2 Semantics
 
 * **MAGIC** identifies this memo as a Watchtower Group Container
+* **VERSION** is the version of the memo format
+* **FLAGS** is a bitfield that controls the meaning of the memo
 * **GROUP_ID** is a client-generated 128-bit random identifier
 * **AUX** allows coexistence with other memo usage:
 
-  * short tag
-  * pointer prefix (e.g. hash prefix of off-chain memo)
-  * app tag
+Flags defines how the group id and aux fields are encoded.
+This is not used by this software but can be helpful for other software that wants to use the same memo format.
+The first two bits are used to define how the group id is encoded. The next two bits are used to define how the aux field is encoded. The remaining bits are reserved.
+
+The possible values are:
+- 00: value is an ASCII-ish / bytes for UI
+- 01: value contains first 8 (for aux) or 16 (for group id) bytes of a keccak256 hash of an external “human memo” stored elsewhere
+- 10: value is an app-defined tag
+- 11: value is non of the above
 
 ### 5.3 Parsing Rules
 
