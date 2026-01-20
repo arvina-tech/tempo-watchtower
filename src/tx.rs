@@ -66,7 +66,7 @@ pub fn parse_raw_tx(raw_hex: &str) -> Result<ParsedTx> {
         None
     };
 
-    let group = extract_group_memo(&tx.calls);
+    let group = extract_group_memo(&tx.calls)?;
 
     Ok(ParsedTx {
         tx_hash,
@@ -82,22 +82,43 @@ pub fn parse_raw_tx(raw_hex: &str) -> Result<ParsedTx> {
     })
 }
 
-fn extract_group_memo(calls: &[tempo_alloy::primitives::transaction::Call]) -> Option<GroupMemo> {
+fn extract_group_memo(
+    calls: &[tempo_alloy::primitives::transaction::Call],
+) -> Result<Option<GroupMemo>> {
+    let mut group_ids = std::collections::BTreeSet::new();
+    let mut first_group = None;
     for call in calls {
-        if let Ok(decoded) = ITIP20::transferWithMemoCall::abi_decode(call.input.as_ref()) {
-            let memo_bytes = decoded.memo.as_slice();
-            if memo_bytes.len() != 32 {
-                continue;
+        if let Some(memo) = tip20_memo(call.input.as_ref())
+            && let Some(group) = parse_group_memo(&memo)
+        {
+            group_ids.insert(group.group_id);
+            if first_group.is_none() {
+                first_group = Some(group);
             }
-            let mut memo = [0u8; 32];
-            memo.copy_from_slice(memo_bytes);
-            if let Some(group) = parse_group_memo(&memo) {
-                return Some(group);
-            }
+        }
+
+        if group_ids.len() > 1 {
+            anyhow::bail!("transaction has more than one memo call with different groups");
         }
     }
 
+    Ok(first_group)
+}
+
+fn tip20_memo(input: &[u8]) -> Option<[u8; 32]> {
+    if let Ok(decoded) = ITIP20::transferWithMemoCall::abi_decode(input) {
+        return Some(b256_to_bytes(decoded.memo));
+    }
+    if let Ok(decoded) = ITIP20::transferFromWithMemoCall::abi_decode(input) {
+        return Some(b256_to_bytes(decoded.memo));
+    }
     None
+}
+
+fn b256_to_bytes(value: alloy::primitives::B256) -> [u8; 32] {
+    let mut memo = [0u8; 32];
+    memo.copy_from_slice(value.as_slice());
+    memo
 }
 
 fn parse_group_memo(memo: &[u8; 32]) -> Option<GroupMemo> {
@@ -123,7 +144,10 @@ fn parse_group_memo(memo: &[u8; 32]) -> Option<GroupMemo> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GROUP_MAGIC, GROUP_TYPE, parse_group_memo};
+    use super::{GROUP_MAGIC, GROUP_TYPE, ITIP20, extract_group_memo, parse_group_memo};
+    use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
+    use alloy::sol_types::SolCall;
+    use tempo_alloy::primitives::transaction::Call;
 
     #[test]
     fn parse_group_memo_accepts_valid() {
@@ -146,5 +170,100 @@ mod tests {
         memo[0..4].copy_from_slice(b"NOPE");
         memo[6..8].copy_from_slice(&GROUP_TYPE);
         assert!(parse_group_memo(&memo).is_none());
+    }
+
+    #[test]
+    fn extract_group_memo_rejects_multiple_groups_over_one_call() {
+        let memo_a = build_group_memo([0x11; 16], [0x22; 8]);
+        let memo_b = build_group_memo([0x33; 16], [0x44; 8]);
+        let calls = vec![memo_call(memo_a), memo_call(memo_a), memo_call(memo_b)];
+
+        let err = extract_group_memo(&calls).unwrap_err();
+        assert!(err.to_string().contains("more than one memo call"));
+    }
+
+    #[test]
+    fn extract_group_memo_accepts_transfer_from_with_memo() {
+        let memo = build_group_memo([0x55; 16], [0x66; 8]);
+        let calls = vec![memo_from_call(memo)];
+
+        let group = extract_group_memo(&calls)
+            .expect("extract group memo")
+            .expect("group memo present");
+        assert_eq!(group.group_id, [0x55; 16]);
+        assert_eq!(group.aux, [0x66; 8]);
+    }
+
+    #[test]
+    fn extract_group_memo_ignores_non_memo_transfers() {
+        let calls = vec![transfer_call(), transfer_from_call()];
+        let group = extract_group_memo(&calls).expect("extract group memo");
+        assert!(group.is_none());
+    }
+
+    fn build_group_memo(group_id: [u8; 16], aux: [u8; 8]) -> [u8; 32] {
+        let mut memo = [0u8; 32];
+        memo[0..4].copy_from_slice(&GROUP_MAGIC);
+        memo[4] = 0x01;
+        memo[6..8].copy_from_slice(&GROUP_TYPE);
+        memo[8..24].copy_from_slice(&group_id);
+        memo[24..32].copy_from_slice(&aux);
+        memo
+    }
+
+    fn memo_call(memo: [u8; 32]) -> Call {
+        let transfer_call = ITIP20::transferWithMemoCall {
+            to: Address::ZERO,
+            amount: U256::from(1u64),
+            memo: B256::from(memo),
+        };
+
+        Call {
+            to: TxKind::Call(Address::ZERO),
+            value: U256::ZERO,
+            input: Bytes::from(transfer_call.abi_encode()),
+        }
+    }
+
+    fn memo_from_call(memo: [u8; 32]) -> Call {
+        let transfer_call = ITIP20::transferFromWithMemoCall {
+            from: Address::ZERO,
+            to: Address::ZERO,
+            amount: U256::from(1u64),
+            memo: B256::from(memo),
+        };
+
+        Call {
+            to: TxKind::Call(Address::ZERO),
+            value: U256::ZERO,
+            input: Bytes::from(transfer_call.abi_encode()),
+        }
+    }
+
+    fn transfer_call() -> Call {
+        let transfer_call = ITIP20::transferCall {
+            to: Address::ZERO,
+            amount: U256::from(1u64),
+        };
+
+        Call {
+            to: TxKind::Call(Address::ZERO),
+            value: U256::ZERO,
+            input: Bytes::from(transfer_call.abi_encode()),
+        }
+    }
+
+    fn transfer_from_call() -> Call {
+        let transfer_call = ITIP20::transferFromCall {
+            from: Address::ZERO,
+            to: Address::ZERO,
+            amount: U256::from(1u64),
+        };
+
+        Call {
+            to: TxKind::Call(Address::ZERO),
+            value: U256::ZERO,
+            input: Bytes::from(transfer_call.abi_encode()),
+        }
     }
 }
