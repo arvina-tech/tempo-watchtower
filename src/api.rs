@@ -16,8 +16,9 @@ use tracing::error;
 
 use crate::db;
 use crate::models::{NewTx, TxRecord, TxStatus};
+use crate::scheduler;
 use crate::state::AppState;
-use crate::tx::{GroupMemo, parse_raw_tx};
+use crate::tx::parse_raw_tx;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -205,46 +206,75 @@ async fn submit_transactions(
     State(state): State<AppState>,
     Json(payload): Json<SubmitRequest>,
 ) -> Result<Json<SubmitResponse>, ApiError> {
-    if state.rpcs.chain(payload.chain_id).is_none() {
+    let SubmitRequest {
+        chain_id,
+        transactions,
+    } = payload;
+    if state.rpcs.chain(chain_id).is_none() {
         return Err(ApiError::bad_request(format!(
             "unsupported chainId {}",
-            payload.chain_id
+            chain_id
         )));
     }
-
-    let mut results = Vec::with_capacity(payload.transactions.len());
-
-    for raw_tx in payload.transactions {
-        let result = match handle_submit(&state, payload.chain_id, &raw_tx).await {
-            Ok(result) => result,
+    let mut prepared = Vec::with_capacity(transactions.len());
+    for (index, raw_tx) in transactions.into_iter().enumerate() {
+        let new_tx = match prepare_new_tx(chain_id, &raw_tx) {
+            Ok(new_tx) => new_tx,
             Err(err) => {
-                error!(error = %err.message, "failed to submit tx");
-                SubmitResult {
-                    ok: false,
-                    tx_hash: None,
-                    sender: None,
-                    nonce_key: None,
-                    nonce: None,
-                    eligible_at: None,
-                    expires_at: None,
-                    group: None,
-                    status: None,
-                    already_known: None,
-                    error: Some(err.message),
-                }
+                let message = format!("transaction {index} invalid: {}", err.message);
+                error!(error = %message, "failed to submit transactions");
+                return Err(ApiError::bad_request(message));
             }
         };
-        results.push(result);
+        prepared.push(new_tx);
+    }
+
+    let mut db_tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+
+    let mut records = Vec::with_capacity(prepared.len());
+    let mut already_known_flags = Vec::with_capacity(prepared.len());
+    for new_tx in prepared {
+        let (record, already_known) = db::insert_tx(&mut db_tx, &new_tx)
+            .await
+            .map_err(|err| ApiError::internal(err.to_string()))?;
+        records.push(record);
+        already_known_flags.push(already_known);
+    }
+
+    db_tx
+        .commit()
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+
+    scheduler::schedule_records(&state, &records)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+
+    let mut results = Vec::with_capacity(records.len());
+    for (record, already_known) in records.into_iter().zip(already_known_flags) {
+        results.push(SubmitResult {
+            ok: true,
+            tx_hash: Some(bytes_to_hex(&record.tx_hash)),
+            sender: Some(bytes_to_hex(&record.sender)),
+            nonce_key: Some(u256_bytes_to_hex(&record.nonce_key)),
+            nonce: Some(record.nonce as u64),
+            eligible_at: Some(record.eligible_at.timestamp()),
+            expires_at: record.expires_at.map(|ts| ts.timestamp()),
+            group: group_info_from_record(&record),
+            status: Some(record.status.clone()),
+            already_known: Some(already_known),
+            error: None,
+        });
     }
 
     Ok(Json(SubmitResponse { results }))
 }
 
-async fn handle_submit(
-    state: &AppState,
-    chain_id: u64,
-    raw_tx: &str,
-) -> Result<SubmitResult, ApiError> {
+fn prepare_new_tx(chain_id: u64, raw_tx: &str) -> Result<NewTx, ApiError> {
     let parsed = parse_raw_tx(raw_tx).map_err(|err| ApiError::bad_request(err.to_string()))?;
     if parsed.chain_id != chain_id {
         return Err(ApiError::bad_request(format!(
@@ -279,9 +309,7 @@ async fn handle_submit(
         _ => now,
     };
 
-    let group = parsed.group.as_ref().map(group_info_from);
-
-    let new_tx = NewTx {
+    Ok(NewTx {
         chain_id: chain_id as i64,
         tx_hash: parsed.tx_hash.as_slice().to_vec(),
         raw_tx: parsed.raw_tx.clone(),
@@ -298,28 +326,6 @@ async fn handle_submit(
         group_aux: parsed.group.as_ref().map(|g| g.aux.to_vec()),
         group_version: parsed.group.as_ref().map(|g| g.version as i16),
         next_action_at: eligible_at,
-    };
-
-    let (record, already_known) = db::insert_tx(&state.db, &new_tx)
-        .await
-        .map_err(|err| ApiError::internal(err.to_string()))?;
-
-    schedule_record(state, &record)
-        .await
-        .map_err(|err| ApiError::internal(err.to_string()))?;
-
-    Ok(SubmitResult {
-        ok: true,
-        tx_hash: Some(bytes_to_hex(&record.tx_hash)),
-        sender: Some(bytes_to_hex(&record.sender)),
-        nonce_key: Some(u256_bytes_to_hex(&record.nonce_key)),
-        nonce: Some(record.nonce as u64),
-        eligible_at: Some(record.eligible_at.timestamp()),
-        expires_at: record.expires_at.map(|ts| ts.timestamp()),
-        group,
-        status: Some(record.status.clone()),
-        already_known: Some(already_known),
-        error: None,
     })
 }
 
@@ -503,14 +509,6 @@ fn group_info_from_record(record: &TxRecord) -> Option<GroupInfo> {
     })
 }
 
-fn group_info_from(group: &GroupMemo) -> GroupInfo {
-    GroupInfo {
-        group_id: bytes_to_hex(&group.group_id),
-        aux: bytes_to_hex(&group.aux),
-        version: group.version,
-    }
-}
-
 async fn build_cancel_plan(
     state: &AppState,
     chain_id: u64,
@@ -550,24 +548,6 @@ async fn build_cancel_plan(
     }
 
     Ok(CancelPlan { by_nonce_key })
-}
-
-async fn schedule_record(state: &AppState, record: &TxRecord) -> anyhow::Result<()> {
-    let next_action_at = match record.next_action_at {
-        Some(ts) => ts.timestamp(),
-        None => return Ok(()),
-    };
-
-    let mut redis = state.redis.clone();
-    let tx_hash = bytes_to_hex(&record.tx_hash);
-    let (key, score) = match record.status.as_str() {
-        "queued" => (ready_key(record.chain_id as u64), next_action_at),
-        "retry_scheduled" => (retry_key(record.chain_id as u64), next_action_at),
-        _ => return Ok(()),
-    };
-
-    let _: () = redis.zadd(key, tx_hash, score).await?;
-    Ok(())
 }
 
 fn ready_key(chain_id: u64) -> String {

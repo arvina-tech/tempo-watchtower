@@ -183,6 +183,36 @@ async fn handle_broadcast(state: AppState, chain_id: u64, record: TxRecord) -> a
     Ok(())
 }
 
+pub async fn schedule_records(state: &AppState, records: &[TxRecord]) -> anyhow::Result<()> {
+    let mut pipe = redis::pipe();
+    pipe.atomic();
+    let mut has_ops = false;
+
+    for record in records {
+        let next_action_at = match record.next_action_at {
+            Some(ts) => ts.timestamp(),
+            None => continue,
+        };
+        let (key, score) = match record.status.as_str() {
+            "queued" => (ready_key(record.chain_id as u64), next_action_at),
+            "retry_scheduled" => (retry_key(record.chain_id as u64), next_action_at),
+            _ => continue,
+        };
+        let tx_hash = bytes_to_hex(&record.tx_hash);
+
+        pipe.zadd(key, tx_hash, score).ignore();
+        has_ops = true;
+    }
+
+    if !has_ops {
+        return Ok(());
+    }
+
+    let mut redis = state.redis.clone();
+    pipe.query_async::<()>(&mut redis).await?;
+    Ok(())
+}
+
 fn schedule_next_attempt(
     now: DateTime<Utc>,
     expires_at: Option<DateTime<Utc>>,

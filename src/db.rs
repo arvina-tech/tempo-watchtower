@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 
 use crate::models::{NewTx, TxRecord, TxStatus};
 
@@ -13,7 +13,10 @@ pub async fn migrate(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-pub async fn insert_tx(pool: &PgPool, tx: &NewTx) -> Result<(TxRecord, bool)> {
+pub async fn insert_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    new_tx: &NewTx,
+) -> Result<(TxRecord, bool)> {
     let result = sqlx::query(
         r#"
         INSERT INTO txs (
@@ -28,31 +31,31 @@ pub async fn insert_tx(pool: &PgPool, tx: &NewTx) -> Result<(TxRecord, bool)> {
         ON CONFLICT (chain_id, tx_hash) DO NOTHING
         "#,
     )
-    .bind(tx.chain_id)
-    .bind(&tx.tx_hash)
-    .bind(&tx.raw_tx)
-    .bind(&tx.sender)
-    .bind(&tx.fee_payer)
-    .bind(&tx.nonce_key)
-    .bind(tx.nonce)
-    .bind(tx.valid_after)
-    .bind(tx.valid_before)
-    .bind(tx.eligible_at)
-    .bind(tx.expires_at)
-    .bind(&tx.status)
-    .bind(&tx.group_id)
-    .bind(&tx.group_aux)
-    .bind(tx.group_version)
-    .bind(tx.next_action_at)
-    .execute(pool)
+    .bind(new_tx.chain_id)
+    .bind(&new_tx.tx_hash)
+    .bind(&new_tx.raw_tx)
+    .bind(&new_tx.sender)
+    .bind(&new_tx.fee_payer)
+    .bind(&new_tx.nonce_key)
+    .bind(new_tx.nonce)
+    .bind(new_tx.valid_after)
+    .bind(new_tx.valid_before)
+    .bind(new_tx.eligible_at)
+    .bind(new_tx.expires_at)
+    .bind(&new_tx.status)
+    .bind(&new_tx.group_id)
+    .bind(&new_tx.group_aux)
+    .bind(new_tx.group_version)
+    .bind(new_tx.next_action_at)
+    .execute(tx.as_mut())
     .await?;
 
     let already_known = result.rows_affected() == 0;
     let record =
         sqlx::query_as::<_, TxRecord>("SELECT * FROM txs WHERE chain_id = $1 AND tx_hash = $2")
-            .bind(tx.chain_id)
-            .bind(&tx.tx_hash)
-            .fetch_one(pool)
+            .bind(new_tx.chain_id)
+            .bind(&new_tx.tx_hash)
+            .fetch_one(tx.as_mut())
             .await?;
 
     Ok((record, already_known))
