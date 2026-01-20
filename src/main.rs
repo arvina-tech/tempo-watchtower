@@ -1,14 +1,3 @@
-mod api;
-mod broadcaster;
-mod config;
-mod db;
-mod models;
-mod rpc;
-mod scheduler;
-mod state;
-mod tx;
-mod watcher;
-
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -18,9 +7,10 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::config::Config;
-use crate::rpc::RpcManager;
-use crate::state::AppState;
+use tempo_watchtower::config::Config;
+use tempo_watchtower::rpc::RpcManager;
+use tempo_watchtower::state::AppState;
+use tempo_watchtower::{api, db, scheduler, watcher};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -60,4 +50,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
