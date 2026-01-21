@@ -31,6 +31,31 @@ On startup the service runs database migrations automatically.
 
 Base path: `/v1`
 
+### JSON-RPC raw transaction submit
+
+`POST /rpc`
+
+Accepts JSON-RPC 2.0 `eth_sendRawTransaction` requests with a single raw transaction hex string. The service extracts the `chainId` from the transaction, validates it against `rpc.chains`, and stores it for broadcasting.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "eth_sendRawTransaction",
+  "params": ["0x..."]
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "0x..."
+}
+```
+
+Errors use standard JSON-RPC codes: `-32600` invalid request, `-32601` method not found, `-32602` invalid params (including unsupported chain IDs or invalid raw tx), `-32603` internal error.
+
 ### Submit transactions (batch)
 
 `POST /v1/transactions`
