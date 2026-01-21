@@ -5,8 +5,8 @@ Tempo Watchtower is a Rust service that accepts signed Tempo transactions, store
 ## Requirements
 
 - Rust toolchain
-- Postgres (see `.env` for defaults)
-- Redis (see `.env` for defaults)
+- Postgres
+- Redis
 
 ## Configuration
 
@@ -79,4 +79,4 @@ Requires header `Authorization: Signature <hex>`: a 65-byte hex secp256k1 signat
 cargo test
 ```
 
-The end-to-end test uses the real Postgres and Redis instances configured in `.env`.
+The end-to-end test uses the real Postgres and Redis instances configured in `config.toml`.
