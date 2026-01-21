@@ -2,12 +2,14 @@ use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use alloy::primitives::{Address, Bytes, TxKind, U256, keccak256};
+use alloy::primitives::{Address, B256, Bytes, TxKind, U256, keccak256};
 use alloy::signers::SignerSync;
 use alloy::signers::local::PrivateKeySigner;
+use alloy::sol_types::SolCall;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::Value;
+use tempo_alloy::contracts::precompiles::ITIP20;
 use tempo_alloy::primitives::transaction::{Call, PrimitiveSignature};
 use tempo_alloy::primitives::{AASigned, TempoSignature, TempoTransaction};
 use tokio::net::TcpListener;
@@ -79,6 +81,25 @@ async fn e2e_signed_tx_with_valid_after_is_broadcast() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn e2e_cancel_group_prevents_broadcast() -> anyhow::Result<()> {
+    let _guard = acquire_e2e_lock().await;
+    let (api_addr, rpc_state) = setup_e2e().await?;
+    let signer = PrivateKeySigner::random();
+    let group_id = [0x11; 16];
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let raw_tx = build_group_signed_tx_with_valid_after(&signer, group_id, Some(now + 2))?;
+
+    send_signed_tx(&api_addr, &raw_tx).await?;
+
+    let auth_header = build_cancel_auth(&signer, group_id)?;
+    cancel_group(&api_addr, signer.address(), group_id, &auth_header).await?;
+
+    assert_not_broadcast_within(&rpc_state, &raw_tx, Duration::from_secs(5)).await?;
+
+    Ok(())
+}
+
 async fn send_signed_tx(api_addr: &SocketAddr, raw_tx: &str) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let resp = client
@@ -91,6 +112,34 @@ async fn send_signed_tx(api_addr: &SocketAddr, raw_tx: &str) -> anyhow::Result<(
         .await?;
 
     assert!(resp.status().is_success());
+
+    Ok(())
+}
+
+async fn cancel_group(
+    api_addr: &SocketAddr,
+    sender: Address,
+    group_id: [u8; 16],
+    auth_header: &str,
+) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let sender_hex = format!("0x{}", hex::encode(sender.as_slice()));
+    let group_hex = format!("0x{}", hex::encode(group_id));
+    let resp = client
+        .post(format!(
+            "http://{api_addr}/v1/senders/{sender_hex}/groups/{group_hex}/cancel"
+        ))
+        .header("Authorization", auth_header)
+        .send()
+        .await?;
+
+    assert!(resp.status().is_success());
+    let body: Value = resp.json().await?;
+    let canceled = body
+        .get("canceled")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    assert_eq!(canceled, 1);
 
     Ok(())
 }
@@ -270,6 +319,72 @@ fn build_signed_tx_with_valid_after(valid_after: Option<u64>) -> anyhow::Result<
     signed.eip2718_encode(&mut buf);
 
     Ok(format!("0x{}", hex::encode(buf)))
+}
+
+fn build_group_signed_tx_with_valid_after(
+    signer: &PrivateKeySigner,
+    group_id: [u8; 16],
+    valid_after: Option<u64>,
+) -> anyhow::Result<String> {
+    let memo = build_group_memo(group_id, [0u8; 8], 0x00);
+    let call = memo_call(memo);
+
+    let tx = TempoTransaction {
+        chain_id: CHAIN_ID,
+        fee_token: None,
+        max_priority_fee_per_gas: 1,
+        max_fee_per_gas: 1,
+        gas_limit: 21000,
+        calls: vec![call],
+        access_list: alloy::rpc::types::AccessList::default(),
+        nonce_key: U256::ZERO,
+        nonce: 0,
+        fee_payer_signature: None,
+        valid_before: None,
+        valid_after,
+        key_authorization: None,
+        tempo_authorization_list: Vec::new(),
+    };
+
+    let signature = signer.sign_hash_sync(&tx.signature_hash())?;
+    let tempo_sig = TempoSignature::Primitive(PrimitiveSignature::Secp256k1(signature));
+    let signed: AASigned = tx.into_signed(tempo_sig);
+
+    let mut buf = Vec::new();
+    signed.eip2718_encode(&mut buf);
+
+    Ok(format!("0x{}", hex::encode(buf)))
+}
+
+fn build_cancel_auth(signer: &PrivateKeySigner, group_id: [u8; 16]) -> anyhow::Result<String> {
+    let hash = keccak256(group_id);
+    let signature = signer.sign_hash_sync(&hash)?;
+    Ok(format!("Signature 0x{}", hex::encode(signature.as_bytes())))
+}
+
+fn build_group_memo(group_id: [u8; 16], aux: [u8; 8], flags: u8) -> [u8; 32] {
+    let mut memo = [0u8; 32];
+    memo[0..4].copy_from_slice(b"TWGR");
+    memo[4] = 0x01;
+    memo[5] = flags;
+    memo[6..8].copy_from_slice(&[0x00, 0x01]);
+    memo[8..24].copy_from_slice(&group_id);
+    memo[24..32].copy_from_slice(&aux);
+    memo
+}
+
+fn memo_call(memo: [u8; 32]) -> Call {
+    let transfer_call = ITIP20::transferWithMemoCall {
+        to: Address::ZERO,
+        amount: U256::from(1u64),
+        memo: B256::from(memo),
+    };
+
+    Call {
+        to: TxKind::Call(Address::ZERO),
+        value: U256::ZERO,
+        input: Bytes::from(transfer_call.abi_encode()),
+    }
 }
 
 async fn setup_e2e() -> anyhow::Result<(SocketAddr, RpcState)> {

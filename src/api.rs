@@ -2,10 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::network::TransactionBuilder;
 use alloy::providers::Provider;
+use alloy::primitives::{keccak256, Signature};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -37,6 +38,8 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+const GROUP_SIGNATURE_HEADER: &str = "authorization";
+
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -61,6 +64,13 @@ impl ApiError {
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: message.into(),
+        }
+    }
+
+    fn unauthorized(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
             message: message.into(),
         }
     }
@@ -592,10 +602,12 @@ async fn get_group(
 
 async fn cancel_group(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((sender, group_id)): Path<(String, String)>,
 ) -> Result<Json<CancelResponse>, ApiError> {
     let sender_bytes = parse_fixed_hex(&sender, 20)?;
     let group_bytes = parse_fixed_hex(&group_id, 16)?;
+    verify_group_signature(&headers, &sender_bytes, &group_bytes)?;
 
     let records = db::cancel_group(&state.db, &sender_bytes, &group_bytes)
         .await
@@ -763,6 +775,43 @@ fn parse_hex(value: &str) -> Result<Vec<u8>, ApiError> {
         return Err(ApiError::bad_request("invalid hex length"));
     }
     hex::decode(value).map_err(|err| ApiError::bad_request(err.to_string()))
+}
+
+fn verify_group_signature(
+    headers: &HeaderMap,
+    sender_bytes: &[u8],
+    group_bytes: &[u8],
+) -> Result<(), ApiError> {
+    let signature_value = headers
+        .get(GROUP_SIGNATURE_HEADER)
+        .ok_or_else(|| ApiError::unauthorized("missing authorization header"))?;
+    let signature_str = signature_value
+        .to_str()
+        .map_err(|_| ApiError::unauthorized("invalid authorization header"))?;
+    let mut parts = signature_str.split_whitespace();
+    let scheme = parts
+        .next()
+        .ok_or_else(|| ApiError::unauthorized("invalid authorization header"))?;
+    let signature_hex = parts
+        .next()
+        .ok_or_else(|| ApiError::unauthorized("invalid authorization header"))?;
+    if scheme != "Signature" || parts.next().is_some() {
+        return Err(ApiError::unauthorized("invalid authorization header"));
+    }
+    let signature_bytes = parse_fixed_hex(signature_hex, 65)
+        .map_err(|_| ApiError::unauthorized("invalid signature"))?;
+    let signature = Signature::from_raw(&signature_bytes)
+        .map_err(|_| ApiError::unauthorized("invalid signature"))?;
+    let group_hash = keccak256(group_bytes);
+    let recovered = signature
+        .recover_address_from_prehash(&group_hash)
+        .map_err(|_| ApiError::unauthorized("invalid signature"))?;
+    let sender_addr = parse_address(sender_bytes)
+        .map_err(|err| ApiError::bad_request(err.to_string()))?;
+    if recovered != sender_addr {
+        return Err(ApiError::unauthorized("signature does not match sender"));
+    }
+    Ok(())
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {

@@ -232,6 +232,7 @@ Meaning:
 * Removes them from scheduler
 * Removes the signed transactions from the database (keep the rest of the data)
 * Does not affect chain state
+* Requires header `Authorization: Signature <hex>`: 65-byte hex secp256k1 signature of `keccak256(groupId)` signed by the group owner (sender)
 
 ---
 

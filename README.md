@@ -65,6 +65,7 @@ Optional query: `chainId`.
 `POST /v1/senders/{sender}/groups/{groupId}/cancel`
 
 Marks the group as `canceled_locally`, clears `raw_tx`, and removes scheduled retries. This does not affect on-chain state.
+Requires header `Authorization: Signature <hex>`: a 65-byte hex secp256k1 signature of `keccak256(groupId)` signed by the group owner (sender).
 
 ## Notes
 
