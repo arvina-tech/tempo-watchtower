@@ -28,7 +28,10 @@ pub async fn recover_after_restart(state: &AppState) -> anyhow::Result<()> {
     }
 
     schedule_records(state, &recovered).await?;
-    info!(count = recovered.len(), "recovered stuck broadcasts after restart");
+    info!(
+        count = recovered.len(),
+        "recovered stuck broadcasts after restart"
+    );
     Ok(())
 }
 
@@ -282,11 +285,7 @@ fn schedule_next_attempt(
     state: &AppState,
 ) -> DateTime<Utc> {
     let max_retry_ms = max_retry_ms_for(now, expires_at, &state.config.scheduler);
-    let delay_ms = retry_backoff_ms(
-        attempts,
-        state.config.scheduler.retry_min_ms,
-        max_retry_ms,
-    );
+    let delay_ms = retry_backoff_ms(attempts, state.config.scheduler.retry_min_ms, max_retry_ms);
     let mut next_action_at = now + chrono::Duration::milliseconds(delay_ms as i64);
     if let Some(expires_at) = expires_at
         && next_action_at > expires_at
@@ -415,14 +414,8 @@ mod tests {
         let far_expiry = now + Duration::hours(2);
         let soon_expiry = now + Duration::minutes(30);
 
-        assert_eq!(
-            max_retry_ms_for(now, Some(far_expiry), &config),
-            60_000
-        );
-        assert_eq!(
-            max_retry_ms_for(now, Some(soon_expiry), &config),
-            5_000
-        );
+        assert_eq!(max_retry_ms_for(now, Some(far_expiry), &config), 60_000);
+        assert_eq!(max_retry_ms_for(now, Some(soon_expiry), &config), 5_000);
         assert_eq!(max_retry_ms_for(now, None, &config), 60_000);
     }
 }

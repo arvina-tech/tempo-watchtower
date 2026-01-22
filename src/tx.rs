@@ -112,4 +112,3 @@ fn parse_eip_tx(raw_tx: Vec<u8>, tx_hash: B256) -> Result<ParsedTx> {
         raw_tx,
     })
 }
-

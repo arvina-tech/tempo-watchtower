@@ -159,7 +159,10 @@ struct TxListQuery {
     chain_id: Option<u64>,
     sender: Option<String>,
     group_id: Option<String>,
-    #[serde(default, deserialize_with = "crate::serde_helpers::deserialize_string_or_vec")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_string_or_vec"
+    )]
     status: Vec<String>,
     limit: Option<i64>,
 }
@@ -692,15 +695,17 @@ async fn store_transactions(
     state: &AppState,
     prepared: Vec<NewTx>,
 ) -> Result<(Vec<TxRecord>, Vec<bool>), ApiError> {
+    type GroupKey = (u64, Vec<u8>, Vec<u8>);
+    type NonceWindow = (u64, Option<u64>);
+
     let mut db_tx = state
         .db
         .begin()
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
 
-    let mut group_nonce_keys: BTreeMap<(u64, Vec<u8>, Vec<u8>), Vec<u8>> = BTreeMap::new();
-    let mut group_windows: BTreeMap<(u64, Vec<u8>, Vec<u8>), Vec<(u64, Option<u64>)>> =
-        BTreeMap::new();
+    let mut group_nonce_keys: BTreeMap<GroupKey, Vec<u8>> = BTreeMap::new();
+    let mut group_windows: BTreeMap<GroupKey, Vec<NonceWindow>> = BTreeMap::new();
     for new_tx in &prepared {
         let Some(group_id) = new_tx.group_id.as_ref() else {
             continue;
@@ -719,25 +724,22 @@ async fn store_transactions(
         } else {
             group_nonce_keys.insert(key.clone(), new_tx.nonce_key.clone());
         }
-        group_windows
-            .entry(key)
-            .or_default()
-            .push((
-                new_tx.nonce.to_uint(),
-                new_tx.valid_before.as_ref().map(|value| value.to_uint()),
-            ));
+        group_windows.entry(key).or_default().push((
+            new_tx.nonce.to_uint(),
+            new_tx.valid_before.as_ref().map(|value| value.to_uint()),
+        ));
     }
 
     for ((chain_id, sender, group_id), nonce_key) in &group_nonce_keys {
         let existing = db::get_group_nonce_key(&mut db_tx, *chain_id, sender, group_id)
             .await
             .map_err(|err| ApiError::internal(err.to_string()))?;
-        if let Some(existing) = existing {
-            if existing != *nonce_key {
-                return Err(ApiError::bad_request(
-                    "group transactions must share the same nonce_key",
-                ));
-            }
+        if let Some(existing) = existing
+            && existing != *nonce_key
+        {
+            return Err(ApiError::bad_request(
+                "group transactions must share the same nonce_key",
+            ));
         }
     }
 
@@ -979,7 +981,6 @@ fn datetime_from_ts(ts: u64) -> Result<DateTime<Utc>, ApiError> {
         .ok_or_else(|| ApiError::bad_request("invalid timestamp"))
 }
 
-
 fn parse_address(bytes: &[u8]) -> anyhow::Result<alloy::primitives::Address> {
     if bytes.len() != 20 {
         anyhow::bail!("invalid address length");
@@ -998,8 +999,7 @@ async fn fetch_current_nonce(
         return Ok(None);
     }
 
-    let nonce_key =
-        u256_from_bytes(nonce_key_bytes).map_err(|err| anyhow::anyhow!(err.message))?;
+    let nonce_key = u256_from_bytes(nonce_key_bytes).map_err(|err| anyhow::anyhow!(err.message))?;
     if nonce_key.is_zero() {
         let provider = chain
             .http
@@ -1051,7 +1051,9 @@ fn nonce_precompile_address() -> alloy::primitives::Address {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_fixed_hex, u256_bytes_to_hex, u256_from_bytes, validate_nonce_valid_before_order};
+    use super::{
+        parse_fixed_hex, u256_bytes_to_hex, u256_from_bytes, validate_nonce_valid_before_order,
+    };
     use alloy::primitives::U256;
 
     #[test]
@@ -1072,11 +1074,7 @@ mod tests {
 
     #[test]
     fn validate_nonce_valid_before_order_accepts_monotonic() {
-        let ok = validate_nonce_valid_before_order(&[
-            (1, Some(10)),
-            (2, Some(10)),
-            (3, Some(12)),
-        ]);
+        let ok = validate_nonce_valid_before_order(&[(1, Some(10)), (2, Some(10)), (3, Some(12))]);
         assert!(ok.is_ok());
     }
 

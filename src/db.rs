@@ -213,7 +213,10 @@ pub async fn list_sender_groups(
     qb.push(" ORDER BY chain_id, group_id LIMIT ")
         .push_bind(limit);
 
-    let rows = qb.build_query_as::<SenderGroupRecord>().fetch_all(pool).await?;
+    let rows = qb
+        .build_query_as::<SenderGroupRecord>()
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 

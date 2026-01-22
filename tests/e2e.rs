@@ -124,9 +124,7 @@ async fn e2e_list_groups_includes_start_end_and_active_filter() -> anyhow::Resul
 
     let group_one_txs = list_transactions(
         &api_addr,
-        &format!(
-            "sender={sender_hex}&groupId={group_one_hex}&chainId={CHAIN_ID}"
-        ),
+        &format!("sender={sender_hex}&groupId={group_one_hex}&chainId={CHAIN_ID}"),
     )
     .await?;
     let mut eligible_times: Vec<i64> = group_one_txs
@@ -159,18 +157,14 @@ async fn e2e_list_groups_includes_start_end_and_active_filter() -> anyhow::Resul
     assert!(find_group(&groups_all, &group_two_hex).is_some());
 
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let groups_active =
-        list_groups(&api_addr, &sender_hex, "chainId=42431&active=true").await?;
+    let groups_active = list_groups(&api_addr, &sender_hex, "chainId=42431&active=true").await?;
     let now_ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
     for group in &groups_active {
         let end_at = group
             .get("endAt")
             .and_then(Value::as_i64)
             .unwrap_or_default();
-        assert!(
-            end_at > now_ts,
-            "active group has endAt <= now"
-        );
+        assert!(end_at > now_ts, "active group has endAt <= now");
     }
     assert!(find_group(&groups_active, &group_one_hex).is_some());
     assert!(find_group(&groups_active, &group_two_hex).is_none());
