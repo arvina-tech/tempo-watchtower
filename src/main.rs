@@ -16,7 +16,7 @@ use tempo_watchtower::state::AppState;
 use tempo_watchtower::{api, db, scheduler, watcher};
 
 #[derive(Debug, Parser)]
-#[command(name = "tempo-watchtower")]
+#[command(name = "tempo-watchtower", version)]
 struct Cli {
     #[arg(
         long,
