@@ -281,10 +281,11 @@ fn schedule_next_attempt(
     attempts: u64,
     state: &AppState,
 ) -> DateTime<Utc> {
+    let max_retry_ms = max_retry_ms_for(now, expires_at, &state.config.scheduler);
     let delay_ms = retry_backoff_ms(
         attempts,
         state.config.scheduler.retry_min_ms,
-        state.config.scheduler.retry_max_ms,
+        max_retry_ms,
     );
     let mut next_action_at = now + chrono::Duration::milliseconds(delay_ms as i64);
     if let Some(expires_at) = expires_at
@@ -293,6 +294,20 @@ fn schedule_next_attempt(
         next_action_at = expires_at;
     }
     next_action_at
+}
+
+fn max_retry_ms_for(
+    now: DateTime<Utc>,
+    expires_at: Option<DateTime<Utc>>,
+    config: &crate::config::SchedulerConfig,
+) -> u64 {
+    let mut max_retry_ms = config.retry_max_ms;
+    if let Some(expires_at) = expires_at
+        && expires_at <= now + chrono::Duration::seconds(config.expiry_soon_window_seconds)
+    {
+        max_retry_ms = max_retry_ms.min(config.expiry_soon_retry_max_ms);
+    }
+    max_retry_ms
 }
 
 fn retry_backoff_ms(attempts: u64, min_ms: u64, max_ms: u64) -> u64 {
@@ -369,7 +384,10 @@ fn retry_key(chain_id: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::retry_backoff_ms;
+    use chrono::{Duration, Utc};
+
+    use super::{max_retry_ms_for, retry_backoff_ms};
+    use crate::config::SchedulerConfig;
 
     #[test]
     fn retry_backoff_respects_bounds() {
@@ -379,5 +397,32 @@ mod tests {
         assert_eq!(retry_backoff_ms(3, 250, 5000), 1000);
         assert_eq!(retry_backoff_ms(10, 250, 5000), 5000);
         assert_eq!(retry_backoff_ms(20, 250, 5000), 5000);
+    }
+
+    #[test]
+    fn expiry_window_clamps_max_retry() {
+        let config = SchedulerConfig {
+            poll_interval_ms: 100,
+            lease_ttl_seconds: 10,
+            max_concurrency: 1,
+            retry_min_ms: 100,
+            retry_max_ms: 60_000,
+            expiry_soon_window_seconds: 3600,
+            expiry_soon_retry_max_ms: 5_000,
+        };
+
+        let now = Utc::now();
+        let far_expiry = now + Duration::hours(2);
+        let soon_expiry = now + Duration::minutes(30);
+
+        assert_eq!(
+            max_retry_ms_for(now, Some(far_expiry), &config),
+            60_000
+        );
+        assert_eq!(
+            max_retry_ms_for(now, Some(soon_expiry), &config),
+            5_000
+        );
+        assert_eq!(max_retry_ms_for(now, None, &config), 60_000);
     }
 }

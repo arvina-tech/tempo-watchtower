@@ -42,6 +42,8 @@ pub struct SchedulerConfig {
     pub max_concurrency: usize,
     pub retry_min_ms: u64,
     pub retry_max_ms: u64,
+    pub expiry_soon_window_seconds: i64,
+    pub expiry_soon_retry_max_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]

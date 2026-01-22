@@ -17,7 +17,9 @@ poll_interval_ms = 200
 lease_ttl_seconds = 30
 max_concurrency = 50
 retry_min_ms = 250
-retry_max_ms = 5000
+retry_max_ms = 900000
+expiry_soon_window_seconds = 3600
+expiry_soon_retry_max_ms = 5000
 
 [broadcaster]
 fanout = 2

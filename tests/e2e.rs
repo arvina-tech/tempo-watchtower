@@ -541,6 +541,8 @@ async fn setup_e2e() -> anyhow::Result<(SocketAddr, RpcState)> {
             max_concurrency: 10,
             retry_min_ms: 100,
             retry_max_ms: 500,
+            expiry_soon_window_seconds: 3600,
+            expiry_soon_retry_max_ms: 5000,
         },
         broadcaster: BroadcasterConfig {
             fanout: 1,
