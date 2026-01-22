@@ -96,6 +96,17 @@ pub struct TxFilters {
     pub limit: i64,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SenderGroupRecord {
+    pub chain_id: PgU64,
+    pub group_id: Vec<u8>,
+    pub group_aux: Vec<u8>,
+    pub group_version: i16,
+    pub group_flags: i16,
+    pub start_at: DateTime<Utc>,
+    pub end_at: DateTime<Utc>,
+}
+
 pub async fn list_txs(pool: &PgPool, filters: TxFilters) -> Result<Vec<TxRecord>> {
     let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM txs WHERE 1=1");
 
@@ -113,15 +124,50 @@ pub async fn list_txs(pool: &PgPool, filters: TxFilters) -> Result<Vec<TxRecord>
         qb.push(" AND status = ").push_bind(status);
     }
 
-    let limit = if filters.limit <= 0 {
-        100
-    } else {
-        filters.limit
-    };
+    let limit = filters.limit.clamp(1, 500);
     qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
 
     let records = qb.build_query_as::<TxRecord>().fetch_all(pool).await?;
     Ok(records)
+}
+
+pub async fn list_sender_groups(
+    pool: &PgPool,
+    sender: &[u8],
+    chain_id: Option<u64>,
+    limit: i64,
+    active_only: bool,
+) -> Result<Vec<SenderGroupRecord>> {
+    let mut qb = QueryBuilder::<Postgres>::new(
+        "SELECT \
+        chain_id, \
+        group_id, \
+        group_aux, \
+        group_version, \
+        COALESCE(group_flags, 0::smallint) AS group_flags, \
+        MIN(eligible_at) AS start_at, \
+        MAX(eligible_at) AS end_at \
+        FROM txs WHERE sender = ",
+    );
+    qb.push_bind(sender);
+    qb.push(" AND group_id IS NOT NULL AND group_aux IS NOT NULL AND group_version IS NOT NULL");
+    if let Some(chain_id) = chain_id {
+        let chain_id = PgU64::from(chain_id);
+        qb.push(" AND chain_id = ").push_bind(chain_id);
+    }
+
+    let limit = limit.clamp(1, 500);
+    qb.push(
+        " GROUP BY chain_id, group_id, group_aux, group_version, COALESCE(group_flags, 0::smallint)",
+    );
+    if active_only {
+        qb.push(" HAVING MAX(eligible_at) > NOW()");
+    }
+    qb.push(" ORDER BY chain_id, group_id LIMIT ")
+        .push_bind(limit);
+
+    let rows = qb.build_query_as::<SenderGroupRecord>().fetch_all(pool).await?;
+    Ok(rows)
 }
 
 pub async fn list_active_txs(pool: &PgPool, chain_id: u64) -> Result<Vec<TxRecord>> {

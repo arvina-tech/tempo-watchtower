@@ -100,6 +100,83 @@ async fn e2e_cancel_group_prevents_broadcast() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn e2e_list_groups_includes_start_end_and_active_filter() -> anyhow::Result<()> {
+    let _guard = acquire_e2e_lock().await;
+    let (api_addr, _rpc_state) = setup_e2e().await?;
+    let signer = PrivateKeySigner::random();
+    let sender_hex = format!("0x{}", hex::encode(signer.address().as_slice()));
+    let group_one = [0x11; 16];
+    let group_two = [0x22; 16];
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+
+    let raw_one = build_group_signed_tx_with_valid_after(&signer, group_one, Some(now + 30))?;
+    let raw_two = build_group_signed_tx_with_valid_after(&signer, group_one, Some(now + 60))?;
+    let raw_three = build_group_signed_tx_with_valid_after(&signer, group_two, None)?;
+
+    send_signed_tx(&api_addr, &raw_one).await?;
+    send_signed_tx(&api_addr, &raw_two).await?;
+    send_signed_tx(&api_addr, &raw_three).await?;
+
+    let group_one_hex = format!("0x{}", hex::encode(group_one));
+    let group_two_hex = format!("0x{}", hex::encode(group_two));
+
+    let group_one_txs = list_transactions(
+        &api_addr,
+        &format!(
+            "sender={sender_hex}&groupId={group_one_hex}&chainId={CHAIN_ID}"
+        ),
+    )
+    .await?;
+    let mut eligible_times: Vec<i64> = group_one_txs
+        .iter()
+        .filter_map(|tx| tx.get("eligibleAt").and_then(Value::as_i64))
+        .collect();
+    eligible_times.sort_unstable();
+    let expected_start = *eligible_times
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing eligibleAt for group one"))?;
+    let expected_end = *eligible_times
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("missing eligibleAt for group one"))?;
+
+    let groups_all = list_groups(&api_addr, &sender_hex, "chainId=42431").await?;
+
+    let group_one_json = find_group(&groups_all, &group_one_hex)
+        .ok_or_else(|| anyhow::anyhow!("group one not found"))?;
+    let start_at = group_one_json
+        .get("startAt")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let end_at = group_one_json
+        .get("endAt")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    assert_eq!(start_at as i64, expected_start);
+    assert_eq!(end_at as i64, expected_end);
+
+    assert!(find_group(&groups_all, &group_two_hex).is_some());
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let groups_active =
+        list_groups(&api_addr, &sender_hex, "chainId=42431&active=true").await?;
+    let now_ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    for group in &groups_active {
+        let end_at = group
+            .get("endAt")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        assert!(
+            end_at > now_ts,
+            "active group has endAt <= now"
+        );
+    }
+    assert!(find_group(&groups_active, &group_one_hex).is_some());
+    assert!(find_group(&groups_active, &group_two_hex).is_none());
+
+    Ok(())
+}
+
 async fn send_signed_tx(api_addr: &SocketAddr, raw_tx: &str) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let resp = client
@@ -144,6 +221,32 @@ async fn cancel_group(
     Ok(())
 }
 
+async fn list_groups(
+    api_addr: &SocketAddr,
+    sender_hex: &str,
+    query: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let client = reqwest::Client::new();
+    let url = if query.is_empty() {
+        format!("http://{api_addr}/v1/senders/{sender_hex}/groups")
+    } else {
+        format!("http://{api_addr}/v1/senders/{sender_hex}/groups?{query}")
+    };
+    let resp = client.get(url).send().await?;
+    assert!(resp.status().is_success());
+    let body: Vec<Value> = resp.json().await?;
+    Ok(body)
+}
+
+fn find_group<'a>(groups: &'a [Value], group_id: &str) -> Option<&'a Value> {
+    groups.iter().find(|group| {
+        group
+            .get("groupId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == group_id)
+    })
+}
+
 async fn send_signed_tx_via_rpc(api_addr: &SocketAddr, raw_tx: &str) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
     let resp = client
@@ -166,6 +269,19 @@ async fn send_signed_tx_via_rpc(api_addr: &SocketAddr, raw_tx: &str) -> anyhow::
         .ok_or_else(|| anyhow::anyhow!("missing result in rpc response"))?;
 
     Ok(result.to_string())
+}
+
+async fn list_transactions(api_addr: &SocketAddr, query: &str) -> anyhow::Result<Vec<Value>> {
+    let client = reqwest::Client::new();
+    let url = if query.is_empty() {
+        format!("http://{api_addr}/v1/transactions")
+    } else {
+        format!("http://{api_addr}/v1/transactions?{query}")
+    };
+    let resp = client.get(url).send().await?;
+    assert!(resp.status().is_success());
+    let body: Vec<Value> = resp.json().await?;
+    Ok(body)
 }
 
 async fn start_fake_rpc() -> anyhow::Result<(SocketAddr, RpcState)> {

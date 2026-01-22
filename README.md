@@ -56,6 +56,10 @@ Optional query: `chainId`.
 
 `GET /v1/transactions?sender=0x...&groupId=0x...&status=queued&chainId=42431&limit=100`
 
+### List groups
+
+`GET /v1/senders/{sender}/groups?chainId=42431&limit=100&active=true`
+
 ### Get group + cancel plan
 
 `GET /v1/senders/{sender}/groups/{groupId}`

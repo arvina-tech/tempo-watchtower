@@ -31,6 +31,7 @@ pub fn router(state: AppState) -> Router {
             post(submit_transactions).get(list_transactions),
         )
         .route("/v1/transactions/:tx_hash", get(get_transaction))
+        .route("/v1/senders/:sender/groups", get(list_groups))
         .route("/v1/senders/:sender/groups/:group_id", get(get_group))
         .route(
             "/v1/senders/:sender/groups/:group_id/cancel",
@@ -175,6 +176,26 @@ struct TxListQuery {
 #[serde(rename_all = "camelCase")]
 struct ChainQuery {
     chain_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupListQuery {
+    chain_id: Option<u64>,
+    limit: Option<i64>,
+    active: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupSummary {
+    chain_id: u64,
+    group_id: String,
+    aux: String,
+    version: u8,
+    flags: u8,
+    start_at: i64,
+    end_at: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -538,6 +559,36 @@ async fn list_transactions(
     let mut out = Vec::with_capacity(records.len());
     for record in &records {
         out.push(tx_info_from(record)?);
+    }
+
+    Ok(Json(out))
+}
+
+async fn list_groups(
+    State(state): State<AppState>,
+    Path(sender): Path<String>,
+    Query(query): Query<GroupListQuery>,
+) -> Result<Json<Vec<GroupSummary>>, ApiError> {
+    let sender_bytes = parse_fixed_hex(&sender, 20)?;
+
+    let limit = query.limit.unwrap_or(100).min(500);
+    let active_only = query.active.unwrap_or(false);
+    let records =
+        db::list_sender_groups(&state.db, &sender_bytes, query.chain_id, limit, active_only)
+            .await
+            .map_err(|err| ApiError::internal(err.to_string()))?;
+
+    let mut out = Vec::with_capacity(records.len());
+    for record in &records {
+        out.push(GroupSummary {
+            chain_id: record.chain_id.to_uint(),
+            group_id: bytes_to_hex(&record.group_id),
+            aux: bytes_to_hex(&record.group_aux),
+            version: record.group_version as u8,
+            flags: record.group_flags as u8,
+            start_at: record.start_at.timestamp(),
+            end_at: record.end_at.timestamp(),
+        });
     }
 
     Ok(Json(out))

@@ -194,7 +194,31 @@ Returns:
 
 ---
 
-### 6.4 Get Group + Cancel Plan
+### 6.4 List Groups
+
+`GET /v1/senders/{sender}/groups?chainId=42431&limit=100&active=true`
+
+```json
+[
+  {
+    "chainId": 42431,
+    "groupId": "0x00112233445566778899aabbccddeeff",
+    "aux": "0x0000000000000000",
+    "version": 1,
+    "flags": 0,
+    "startAt": 1730000000,
+    "endAt": 1730003600
+  }
+]
+```
+
+Notes:
+* `endAt` is the largest `eligibleAt` for the group.
+* `active=true` returns groups whose `endAt` is in the future.
+
+---
+
+### 6.5 Get Group + Cancel Plan
 
 `GET /v1/senders/{sender}/groups/{groupId}`
 
@@ -224,7 +248,7 @@ Meaning:
 
 ---
 
-### 6.5 Stop Group (local cancel)
+### 6.6 Stop Group (local cancel)
 
 `POST /v1/senders/{sender}/groups/{groupId}/cancel`
 
