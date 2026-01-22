@@ -19,6 +19,7 @@ use tracing::{error, info};
 
 use crate::db;
 use crate::models::{NewTx, TxRecord, TxStatus};
+use crate::nonce_key::is_group_nonce_key;
 use crate::scheduler;
 use crate::state::AppState;
 use crate::tx::parse_raw_tx;
@@ -329,10 +330,10 @@ fn prepare_new_tx_from_parsed(parsed: crate::tx::ParsedTx) -> Result<NewTx, ApiE
     };
 
     let nonce_key_bytes = u256_to_bytes(parsed.nonce_key);
-    let group_id = if parsed.nonce_key.is_zero() {
-        None
-    } else {
+    let group_id = if is_group_nonce_key(&nonce_key_bytes) {
         Some(group_id_from_nonce_key(&nonce_key_bytes))
+    } else {
+        None
     };
 
     Ok(NewTx {

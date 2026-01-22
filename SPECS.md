@@ -207,11 +207,72 @@ Meaning:
 
 * To cancel the group, user must invalidate all nonces for the group's nonce_key.
 * All group members must share the same nonce_key.
-* Transactions are grouped only when `nonceKey` is non-zero; `nonceKey = 0` or unset yields no `groupId`.
+* Transactions are grouped only when `nonceKey` matches the explicit grouping format
 
 ---
 
-### 6.6 Stop Group (local cancel)
+### 6.6 Nonce Key Format (Explicit Grouping)
+
+Nonce keys are 32-byte values. Transactions are grouped only when the nonce key matches this format.
+
+#### Binary layout (big-endian)
+
+```
+0..3   magic     = 0x4E4B4731   // "NKG1"
+4      version   = 0x01
+5      kind      = enum (purpose)
+6..7   flags     = u16
+8..15  scope_id  = u64
+16..19 group_id  = u32
+20..31 memo      = 12 bytes
+```
+
+#### Flags encoding (u16)
+
+```
+bits 0..1   scope_id encoding
+bits 2..3   group_id encoding
+bits 4..5   memo encoding
+bits 6..15  reserved (must be 0)
+```
+
+Encoding values (same for scope_id, group_id, memo):
+
+```
+00 = numeric/raw
+01 = ASCII
+10 = reserved (undefined)
+11 = reserved (undefined)
+```
+
+#### Display / interpretation rules
+
+* `numeric/raw`:
+  * `scope_id` and `group_id` are interpreted as unsigned integers (big-endian) and displayed in decimal.
+  * `memo` is rendered as hex (full 12 bytes, with 0x prefix).
+* `ASCII`:
+  * Bytes must be printable 7-bit ASCII (0x20..0x7E).
+  * Trailing `0x00` bytes are trimmed for display.
+  * If any non-printable byte is present, render as hex.
+
+#### Example
+
+```
+magic/version/kind/flags = 4e4b4731 01 02 0001
+scope_id (ASCII) = 504159524f4c4c00  // "PAYROLL\0"
+group_id (numeric) = 00000f42
+memo (ASCII) = 4a414e2d323032360000000000  // "JAN-2026"
+```
+
+Display:
+
+```
+kind=0x02, scope=PAYROLL, group=3906, memo=JAN-2026
+```
+
+---
+
+### 6.7 Stop Group (local cancel)
 
 `POST /v1/senders/{sender}/groups/{groupId}/cancel`
 

@@ -84,7 +84,7 @@ async fn e2e_cancel_group_prevents_broadcast() -> anyhow::Result<()> {
     let _guard = acquire_e2e_lock().await;
     let (api_addr, rpc_state) = setup_e2e().await?;
     let signer = PrivateKeySigner::random();
-    let nonce_key = U256::from(11u64);
+    let nonce_key = build_group_nonce_key(1, 11);
     let group_id = group_id_from_nonce_key(nonce_key);
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let raw_tx = build_group_signed_tx_with_valid_after(&signer, nonce_key, Some(now + 2))?;
@@ -105,8 +105,8 @@ async fn e2e_list_groups_includes_start_end_and_active_filter() -> anyhow::Resul
     let (api_addr, _rpc_state) = setup_e2e().await?;
     let signer = PrivateKeySigner::random();
     let sender_hex = format!("0x{}", hex::encode(signer.address().as_slice()));
-    let nonce_key_one = U256::from(11u64);
-    let nonce_key_two = U256::from(22u64);
+    let nonce_key_one = build_group_nonce_key(1, 11);
+    let nonce_key_two = build_group_nonce_key(1, 22);
     let group_one = group_id_from_nonce_key(nonce_key_one);
     let group_two = group_id_from_nonce_key(nonce_key_two);
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -482,6 +482,17 @@ fn group_id_from_nonce_key(nonce_key: U256) -> [u8; 16] {
     let mut group_id = [0u8; 16];
     group_id.copy_from_slice(&hash[..16]);
     group_id
+}
+
+fn build_group_nonce_key(scope_id: u64, group_id: u32) -> U256 {
+    let mut bytes = [0u8; 32];
+    bytes[..4].copy_from_slice(b"NKG1");
+    bytes[4] = 0x01;
+    bytes[5] = 0x01;
+    bytes[6..8].copy_from_slice(&0u16.to_be_bytes());
+    bytes[8..16].copy_from_slice(&scope_id.to_be_bytes());
+    bytes[16..20].copy_from_slice(&group_id.to_be_bytes());
+    U256::from_be_slice(&bytes)
 }
 
 async fn setup_e2e() -> anyhow::Result<(SocketAddr, RpcState)> {

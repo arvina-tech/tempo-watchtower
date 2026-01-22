@@ -3,6 +3,7 @@ pub mod broadcaster;
 pub mod config;
 pub mod db;
 pub mod models;
+pub mod nonce_key;
 pub mod rpc;
 pub mod scheduler;
 pub mod serde_helpers;
