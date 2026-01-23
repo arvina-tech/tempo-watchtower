@@ -5,11 +5,12 @@ use alloy::primitives::{Signature, keccak256};
 use alloy::providers::Provider;
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use axum_extra::extract::Query;
 use chrono::{DateTime, TimeZone, Utc};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -31,11 +32,11 @@ pub fn router(state: AppState) -> Router {
             "/v1/transactions",
             post(submit_transactions).get(list_transactions),
         )
-        .route("/v1/transactions/:tx_hash", get(get_transaction))
-        .route("/v1/senders/:sender/groups", get(list_groups))
-        .route("/v1/senders/:sender/groups/:group_id", get(get_group))
+        .route("/v1/transactions/{tx_hash}", get(get_transaction))
+        .route("/v1/senders/{sender}/groups", get(list_groups))
+        .route("/v1/senders/{sender}/groups/{group_id}", get(get_group))
         .route(
-            "/v1/senders/:sender/groups/:group_id/cancel",
+            "/v1/senders/{sender}/groups/{group_id}/cancel",
             post(cancel_group),
         )
         .with_state(state)
