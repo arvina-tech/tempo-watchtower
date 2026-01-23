@@ -821,8 +821,8 @@ fn tx_info_from(record: &TxRecord) -> Result<TxInfo, ApiError> {
     let parsed_transaction = match record.raw_tx.as_deref() {
         Some(raw_tx) => {
             let raw_hex = format!("0x{}", hex::encode(raw_tx));
-            let parsed = parse_raw_tx(&raw_hex)
-                .map_err(|err| ApiError::internal(err.to_string()))?;
+            let parsed =
+                parse_raw_tx(&raw_hex).map_err(|err| ApiError::internal(err.to_string()))?;
             Some(
                 serde_json::to_value(parsed.parsed_transaction)
                     .map_err(|err| ApiError::internal(err.to_string()))?,
