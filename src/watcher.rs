@@ -4,6 +4,7 @@ use std::time::Duration;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::B256;
 use alloy::providers::Provider;
+use alloy_rpc_types_eth::BlockId;
 use chrono::Utc;
 use tokio_stream::StreamExt;
 use tracing::{info, warn};
@@ -94,32 +95,18 @@ async fn process_tick_with_chain(
         return Ok(());
     }
 
-    let now = Utc::now();
-    let mut pending = Vec::new();
+    let provider = chain
+        .http
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing provider"))?;
+    let latest_block = provider.get_block(BlockId::latest()).await?;
 
-    for record in records {
-        if let Some(expires_at) = record.expires_at
-            && expires_at <= now
-        {
-            db::mark_expired(&state.db, record.id).await?;
-            continue;
-        }
-
-        if let Some(receipt) = fetch_receipt(chain, &record).await? {
-            let receipt_json = serde_json::to_value(receipt)?;
-            db::mark_executed(&state.db, record.id, receipt_json).await?;
-            continue;
-        }
-
-        pending.push(record);
-    }
-
-    if pending.is_empty() {
-        return Ok(());
-    }
+    let now = latest_block
+        .map(|block| block.header.timestamp_millis() as i64)
+        .unwrap_or(Utc::now().timestamp_millis());
 
     let mut grouped: BTreeMap<(Vec<u8>, Vec<u8>), Vec<TxRecord>> = BTreeMap::new();
-    for record in pending {
+    for record in records {
         grouped
             .entry((record.sender.clone(), record.nonce_key.clone()))
             .or_default()
@@ -132,6 +119,19 @@ async fn process_tick_with_chain(
 
         if let Some(current_nonce) = current_nonce {
             for record in records {
+                if let Some(expires_at) = record.expires_at
+                    && expires_at.timestamp_millis() <= now
+                {
+                    db::mark_expired(&state.db, record.id).await?;
+                    continue;
+                }
+
+                if let Some(receipt) = fetch_receipt(chain, &record).await? {
+                    let receipt_json = serde_json::to_value(receipt)?;
+                    db::mark_executed(&state.db, record.id, receipt_json).await?;
+                    continue;
+                }
+
                 if current_nonce > record.nonce.to_uint() {
                     db::mark_stale_by_nonce(&state.db, record.id).await?;
                 }
