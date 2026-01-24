@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state="${1:-}"
+if [[ "$state" != "prepared" ]]; then
+  exit 0
+fi
+
+cargo_version=$(awk -F'=' '
+  $0 ~ /^\[package\]/ { in_package = 1; next }
+  $0 ~ /^\[/ { in_package = 0 }
+  in_package && $1 ~ /^version[[:space:]]*$/ {
+    gsub(/"/, "", $2)
+    gsub(/[[:space:]]/, "", $2)
+    print $2
+    exit
+  }
+' Cargo.toml)
+
+if [[ -z "$cargo_version" ]]; then
+  echo "Unable to read version from Cargo.toml." >&2
+  exit 1
+fi
+
+while read -r old_ref new_ref ref_name; do
+  [[ -z "${ref_name:-}" ]] && continue
+
+  if [[ "$ref_name" != refs/tags/* ]]; then
+    continue
+  fi
+
+  if [[ "$new_ref" == "0000000000000000000000000000000000000000" ]]; then
+    # Tag deletion; allow without checks.
+    continue
+  fi
+
+  tag_name="${ref_name#refs/tags/}"
+  tag_version="${tag_name#v}"
+
+  if [[ "$tag_version" != "$cargo_version" ]]; then
+    echo "Tag '$tag_name' does not match Cargo.toml version '$cargo_version'." >&2
+    echo "Create tag 'v$cargo_version' (or '$cargo_version') to match." >&2
+    exit 1
+  fi
+done

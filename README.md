@@ -109,6 +109,14 @@ cargo run
 
 On startup the service runs database migrations automatically.
 
+### Git hooks
+
+To enforce that release tags match the `Cargo.toml` package version (ignoring a leading `v`), this repo includes a `reference-transaction` hook. Enable it with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Notes
 
 - Any valid Tempo transaction is accepted, including ones with custom nonce keys.
