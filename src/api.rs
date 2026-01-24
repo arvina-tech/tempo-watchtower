@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Signature, keccak256};
+use alloy::primitives::{Bytes, Signature, keccak256};
 use alloy::providers::Provider;
 use axum::{
     Json, Router,
@@ -16,6 +16,7 @@ use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx_pg_uint::{OptionPgUint, PgU64};
+use tempo_alloy::primitives::transaction::Call;
 use tracing::{error, info};
 
 use crate::db;
@@ -134,6 +135,8 @@ struct SubmitResult {
 struct TxInfo {
     chain_id: u64,
     tx_hash: String,
+    #[serde(rename = "type")]
+    tx_type: u8,
     sender: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     fee_payer: Option<String>,
@@ -156,8 +159,15 @@ struct TxInfo {
     last_broadcast_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<serde_json::Value>,
+    gas: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    parsed_transaction: Option<serde_json::Value>,
+    gas_price: Option<u128>,
+    max_fee_per_gas: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_priority_fee_per_gas: Option<u128>,
+    input: Bytes,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    calls: Option<Vec<Call>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -885,22 +895,18 @@ fn validate_nonce_valid_before_order(pairs: &[(u64, Option<u64>)]) -> Result<(),
 }
 
 fn tx_info_from(record: &TxRecord) -> Result<TxInfo, ApiError> {
-    let parsed_transaction = match record.raw_tx.as_deref() {
+    let parsed = match record.raw_tx.as_deref() {
         Some(raw_tx) => {
             let raw_hex = format!("0x{}", hex::encode(raw_tx));
-            let parsed =
-                parse_raw_tx(&raw_hex).map_err(|err| ApiError::internal(err.to_string()))?;
-            Some(
-                serde_json::to_value(parsed.parsed_transaction)
-                    .map_err(|err| ApiError::internal(err.to_string()))?,
-            )
+            parse_raw_tx(&raw_hex).map_err(|err| ApiError::internal(err.to_string()))?
         }
-        None => Some(serde_json::Value::Null),
+        None => return Err(ApiError::internal("missing raw transaction")),
     };
 
     Ok(TxInfo {
         chain_id: record.chain_id.to_uint(),
         tx_hash: bytes_to_hex(&record.tx_hash),
+        tx_type: parsed.tx_type,
         sender: bytes_to_hex(&record.sender),
         fee_payer: record.fee_payer.as_ref().map(|v| bytes_to_hex(v)),
         nonce_key: u256_bytes_to_hex(&record.nonce_key),
@@ -916,7 +922,12 @@ fn tx_info_from(record: &TxRecord) -> Result<TxInfo, ApiError> {
         last_error: record.last_error.clone(),
         last_broadcast_at: record.last_broadcast_at.map(|ts| ts.timestamp()),
         receipt: record.receipt.clone(),
-        parsed_transaction,
+        gas: parsed.gas,
+        gas_price: parsed.gas_price,
+        max_fee_per_gas: parsed.max_fee_per_gas,
+        max_priority_fee_per_gas: parsed.max_priority_fee_per_gas,
+        input: parsed.input,
+        calls: parsed.calls,
     })
 }
 
