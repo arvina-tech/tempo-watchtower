@@ -188,13 +188,15 @@ Notes:
     "chainId": 42431,
     "groupId": "0x00112233445566778899aabbccddeeff",
     "startAt": 1730000000,
-    "endAt": 1730003600
+    "endAt": 1730003600,
+    "nextPaymentAt": 1730000000
   }
 ]
 ```
 
 Notes:
 * `endAt` is the largest `eligibleAt` for the group.
+* `nextPaymentAt` is the earliest `eligibleAt` for non-terminal transactions in the group.
 * `active=true` returns groups whose `endAt` is in the future.
 
 ---

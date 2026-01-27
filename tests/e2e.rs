@@ -176,8 +176,13 @@ async fn e2e_list_groups_includes_start_end_and_active_filter() -> anyhow::Resul
         .get("endAt")
         .and_then(Value::as_u64)
         .unwrap_or_default();
+    let next_payment_at = group_one_json
+        .get("nextPaymentAt")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
     assert_eq!(start_at as i64, expected_start);
     assert_eq!(end_at as i64, expected_end);
+    assert_eq!(next_payment_at, expected_start);
 
     assert!(find_group(&groups_all, &group_two_hex).is_some());
 
@@ -297,9 +302,9 @@ async fn list_groups(
 ) -> anyhow::Result<Vec<Value>> {
     let client = reqwest::Client::new();
     let url = if query.is_empty() {
-        format!("http://{api_addr}/v1/senders/{sender_hex}/groups")
+        format!("http://{api_addr}/v1/groups?sender={sender_hex}")
     } else {
-        format!("http://{api_addr}/v1/senders/{sender_hex}/groups?{query}")
+        format!("http://{api_addr}/v1/groups?sender={sender_hex}&{query}")
     };
     let resp = client.get(url).send().await?;
     assert!(resp.status().is_success());

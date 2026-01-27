@@ -153,6 +153,7 @@ pub struct SenderGroupRecord {
     pub group_id: Vec<u8>,
     pub start_at: DateTime<Utc>,
     pub end_at: DateTime<Utc>,
+    pub next_payment_at: Option<DateTime<Utc>>,
 }
 
 pub async fn list_txs(pool: &PgPool, filters: TxFilters) -> Result<Vec<TxRecord>> {
@@ -189,7 +190,7 @@ pub async fn list_txs(pool: &PgPool, filters: TxFilters) -> Result<Vec<TxRecord>
 
 pub async fn list_sender_groups(
     pool: &PgPool,
-    sender: &[u8],
+    sender: &Option<Vec<u8>>,
     chain_id: Option<u64>,
     limit: i64,
     active_only: bool,
@@ -199,11 +200,25 @@ pub async fn list_sender_groups(
         chain_id, \
         group_id, \
         MIN(eligible_at) AS start_at, \
-        MAX(eligible_at) AS end_at \
-        FROM txs WHERE sender = ",
+        MAX(eligible_at) AS end_at, \
+        MIN(eligible_at) FILTER (WHERE status IN (",
     );
-    qb.push_bind(sender);
-    qb.push(" AND group_id IS NOT NULL");
+    let mut statuses = qb.separated(", ");
+    for status in [
+        TxStatus::Queued.as_str(),
+        TxStatus::Broadcasting.as_str(),
+        TxStatus::RetryScheduled.as_str(),
+    ] {
+        statuses.push_bind(status);
+    }
+    qb.push(
+        ")) AS next_payment_at \
+        FROM txs \
+        ",
+    );
+    if let Some(sender) = sender {
+        qb.push(" WHERE sender = ").push_bind(sender);
+    }
     if let Some(chain_id) = chain_id {
         let chain_id = PgU64::from(chain_id);
         qb.push(" AND chain_id = ").push_bind(chain_id);

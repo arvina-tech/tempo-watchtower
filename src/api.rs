@@ -37,7 +37,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/transactions/{tx_hash}",
             get(get_transaction).delete(cancel_transaction),
         )
-        .route("/v1/senders/{sender}/groups", get(list_groups))
+        .route("/v1/groups", get(list_groups))
         .route("/v1/senders/{sender}/groups/{group_id}", get(get_group))
         .route(
             "/v1/senders/{sender}/groups/{group_id}/cancel",
@@ -194,6 +194,7 @@ struct ChainQuery {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GroupListQuery {
+    sender: Option<String>,
     chain_id: Option<u64>,
     limit: Option<i64>,
     active: Option<bool>,
@@ -206,6 +207,8 @@ struct GroupSummary {
     group_id: String,
     start_at: i64,
     end_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_payment_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -654,10 +657,12 @@ async fn list_transactions(
 
 async fn list_groups(
     State(state): State<AppState>,
-    Path(sender): Path<String>,
     Query(query): Query<GroupListQuery>,
 ) -> Result<Json<Vec<GroupSummary>>, ApiError> {
-    let sender_bytes = parse_fixed_hex(&sender, 20)?;
+    let sender_bytes = match query.sender {
+        Some(sender) => Some(parse_fixed_hex(&sender, 20)?),
+        None => None,
+    };
 
     let limit = query.limit.unwrap_or(100).min(500);
     let active_only = query.active.unwrap_or(false);
@@ -673,6 +678,7 @@ async fn list_groups(
             group_id: bytes_to_hex(&record.group_id),
             start_at: record.start_at.timestamp(),
             end_at: record.end_at.timestamp(),
+            next_payment_at: record.next_payment_at.map(|ts| ts.timestamp()),
         });
     }
 
