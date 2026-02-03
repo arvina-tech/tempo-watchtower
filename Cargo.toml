@@ -2,6 +2,7 @@
 name = "tempo-watchtower"
 version = "0.2.6"
 edition = "2024"
+default-run = "tempo-watchtower"
 
 [dependencies]
 anyhow = "1.0"

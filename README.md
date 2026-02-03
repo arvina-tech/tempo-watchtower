@@ -401,7 +401,7 @@ Cancel a group locally. This marks all group transactions as `canceled_locally`,
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `Authorization` | Yes | `Signature <hex>` — 65-byte secp256k1 signature of `keccak256(groupId)` signed by the sender |
+| `Authorization` | Yes | `Signature <hex>` — Tempo primitive signature bytes over `keccak256(groupId)` signed by the sender. Accepts legacy 65-byte secp256k1 signatures or P256/WebAuthn signatures with a 1-byte type prefix (`0x01`/`0x02`) per the Tempo signature spec. |
 
 #### Response
 

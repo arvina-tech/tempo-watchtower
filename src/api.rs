@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Bytes, Signature, keccak256};
+use alloy::primitives::{Bytes, keccak256};
 use alloy::providers::Provider;
 use axum::{
     Json, Router,
@@ -16,7 +16,7 @@ use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx_pg_uint::{OptionPgUint, PgU64};
-use tempo_alloy::primitives::transaction::Call;
+use tempo_alloy::primitives::transaction::{Call, PrimitiveSignature};
 use tracing::{error, info};
 
 use crate::db;
@@ -1114,13 +1114,13 @@ fn verify_group_signature(
     if scheme != "Signature" || parts.next().is_some() {
         return Err(ApiError::unauthorized("invalid authorization header"));
     }
-    let signature_bytes = parse_fixed_hex(signature_hex, 65)
+    let signature_bytes = parse_hex(signature_hex)
         .map_err(|_| ApiError::unauthorized("invalid signature"))?;
-    let signature = Signature::from_raw(&signature_bytes)
+    let signature = PrimitiveSignature::from_bytes(&signature_bytes)
         .map_err(|_| ApiError::unauthorized("invalid signature"))?;
     let group_hash = keccak256(group_bytes);
     let recovered = signature
-        .recover_address_from_prehash(&group_hash)
+        .recover_signer(&group_hash)
         .map_err(|_| ApiError::unauthorized("invalid signature"))?;
     let sender_addr =
         parse_address(sender_bytes).map_err(|err| ApiError::bad_request(err.to_string()))?;

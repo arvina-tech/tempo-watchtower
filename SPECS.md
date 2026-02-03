@@ -298,7 +298,7 @@ kind=0x02, scope=PAYROLL, group=3906, memo=JAN-2026
 * Removes them from scheduler
 * Removes the signed transactions from the database (keep the rest of the data)
 * Does not affect chain state
-* Requires header `Authorization: Signature <hex>`: 65-byte hex secp256k1 signature of `keccak256(groupId)` signed by the group owner (sender)
+* Requires header `Authorization: Signature <hex>`: Tempo primitive signature bytes over `keccak256(groupId)` signed by the group owner (sender). Accepts legacy 65-byte secp256k1 signatures or P256/WebAuthn signatures with a 1-byte type prefix (`0x01`/`0x02`) per the Tempo signature spec.
 
 ---
 
