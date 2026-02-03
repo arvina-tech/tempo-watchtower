@@ -1114,8 +1114,8 @@ fn verify_group_signature(
     if scheme != "Signature" || parts.next().is_some() {
         return Err(ApiError::unauthorized("invalid authorization header"));
     }
-    let signature_bytes = parse_hex(signature_hex)
-        .map_err(|_| ApiError::unauthorized("invalid signature"))?;
+    let signature_bytes =
+        parse_hex(signature_hex).map_err(|_| ApiError::unauthorized("invalid signature"))?;
     let signature = PrimitiveSignature::from_bytes(&signature_bytes)
         .map_err(|_| ApiError::unauthorized("invalid signature"))?;
     let group_hash = keccak256(group_bytes);
