@@ -598,7 +598,7 @@ async fn setup_e2e() -> anyhow::Result<(SocketAddr, RpcState)> {
     let redis_url = env_var("REDIS_HOST")
         .and_then(|host| {
             let port = env_var("REDIS_PORT")?;
-            let db = env_var("REDIS_DB")?;
+            let db = env_var("REDIS_DB_TEST").or_else(|| env_var("REDIS_DB"))?;
             Some(format!("redis://{host}:{port}/{db}"))
         })
         .ok_or_else(|| anyhow::anyhow!("missing REDIS env vars"))?;
