@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
+use alloy::primitives::B256;
 use alloy::providers::{DynProvider, Provider, ProviderBuilder, WsConnect};
 use anyhow::Result;
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::models::TxRecord;
 use tempo_alloy::TempoNetwork;
 
 #[derive(Clone)]
@@ -20,6 +22,25 @@ pub struct ChainRpc {
 #[derive(Clone)]
 pub struct RpcManager {
     chains: HashMap<u64, ChainRpc>,
+}
+
+pub async fn fetch_receipt(
+    chain: &ChainRpc,
+    record: &TxRecord,
+) -> anyhow::Result<Option<tempo_alloy::rpc::TempoTransactionReceipt>> {
+    let provider = chain
+        .http
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing provider"))?;
+
+    if record.tx_hash.len() != 32 {
+        warn!(id = record.id, "invalid tx_hash length");
+        return Ok(None);
+    }
+
+    let hash = B256::from_slice(&record.tx_hash);
+    let receipt = provider.get_transaction_receipt(hash).await?;
+    Ok(receipt)
 }
 
 impl RpcManager {

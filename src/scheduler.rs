@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::broadcaster::{self, BroadcastOutcome};
 use crate::db;
 use crate::models::{TxRecord, TxStatus};
+use crate::rpc::fetch_receipt;
 use crate::state::AppState;
 
 pub fn start(state: AppState) {
@@ -169,6 +170,17 @@ async fn handle_broadcast(
         .chain(chain_id)
         .ok_or_else(|| anyhow::anyhow!("missing rpc chain"))?;
 
+    if let Some(receipt) = fetch_receipt(chain, &record).await? {
+        info!(
+            %chain_id,
+            tx_hash = %bytes_to_hex(&record.tx_hash),
+            "transaction already executed"
+        );
+        let receipt_json = serde_json::to_value(receipt)?;
+        db::mark_executed(&state.db, record.id, receipt_json).await?;
+        return Ok(());
+    }
+
     let tx_hash = bytes_to_hex(&record.tx_hash);
     let outcome = broadcaster::broadcast_raw_tx(
         chain,
@@ -191,14 +203,21 @@ async fn handle_broadcast(
                 error = ?error,
                 "transaction broadcasted",
             );
-            let _ = db::mark_broadcasted_if_leased(
+            let next_action_at =
+                schedule_next_attempt(now, record.expires_at, attempts as u64, &state);
+            let updated = db::reschedule_tx_if_leased(
                 &state.db,
                 record.id,
                 lease_owner.as_str(),
+                TxStatus::Broadcasting.as_str(),
+                next_action_at,
                 attempts,
                 error.as_deref(),
             )
             .await?;
+            if updated {
+                update_retry_schedule(&state, chain_id, &record.tx_hash, next_action_at).await?;
+            }
         }
         BroadcastOutcome::Retry { error } => {
             warn!(

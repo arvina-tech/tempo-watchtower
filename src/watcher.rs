@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use alloy::network::TransactionBuilder;
-use alloy::primitives::B256;
 use alloy::providers::Provider;
 use alloy_rpc_types_eth::BlockId;
 use chrono::Utc;
@@ -11,7 +10,7 @@ use tracing::{info, warn};
 
 use crate::db;
 use crate::models::TxRecord;
-use crate::rpc::ChainRpc;
+use crate::rpc::{ChainRpc, fetch_receipt};
 use crate::state::AppState;
 
 pub fn start(state: AppState) {
@@ -140,25 +139,6 @@ async fn process_tick_with_chain(
     }
 
     Ok(())
-}
-
-async fn fetch_receipt(
-    chain: &ChainRpc,
-    record: &TxRecord,
-) -> anyhow::Result<Option<tempo_alloy::rpc::TempoTransactionReceipt>> {
-    let provider = chain
-        .http
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("missing provider"))?;
-
-    if record.tx_hash.len() != 32 {
-        warn!(id = record.id, "invalid tx_hash length");
-        return Ok(None);
-    }
-
-    let hash = B256::from_slice(&record.tx_hash);
-    let receipt = provider.get_transaction_receipt(hash).await?;
-    Ok(receipt)
 }
 
 async fn fetch_current_nonce(
