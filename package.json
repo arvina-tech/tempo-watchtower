@@ -1,0 +1,12 @@
+{
+  "name": "tempo-watchtower-docs",
+  "private": true,
+  "scripts": {
+    "docs:dev": "vocs dev",
+    "docs:build": "vocs build",
+    "docs:preview": "vocs preview"
+  },
+  "devDependencies": {
+    "vocs": "next"
+  }
+}
