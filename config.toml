@@ -10,7 +10,7 @@ url = "redis://${REDIS_HOST}:${REDIS_PORT}/${REDIS_DB}"
 [rpc]
 # Per-chain RPC endpoints. Keys are chain IDs.
 [rpc.chains]
-"42431" = ["${RPC_URLS}"]
+"42431" = ["${RPC_URL}"]
 
 [scheduler]
 poll_interval_ms = 200
