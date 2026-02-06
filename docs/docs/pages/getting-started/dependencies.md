@@ -1,3 +1,8 @@
+---
+title: Dependencies
+description: External services and optional components required to run Watchtower.
+---
+
 # Dependencies
 
 This page describes the external services and tooling needed to run Tempo Watchtower in development or production.

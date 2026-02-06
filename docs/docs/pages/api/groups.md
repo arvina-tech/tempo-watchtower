@@ -1,3 +1,8 @@
+---
+title: Groups
+description: List and inspect transaction groups, including fields and filtering.
+---
+
 # Groups
 
 ## List Groups

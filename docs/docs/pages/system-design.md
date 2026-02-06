@@ -1,3 +1,8 @@
+---
+title: System Design
+description: Architecture overview of scheduling, broadcasting, watching, storage, and observability.
+---
+
 # System Design
 
 ## Scheduler

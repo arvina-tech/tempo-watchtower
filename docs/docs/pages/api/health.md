@@ -1,3 +1,8 @@
+---
+title: Health
+description: Health check endpoint details, dependency status, and build/runtime metadata.
+---
+
 # Health
 
 `GET /health`

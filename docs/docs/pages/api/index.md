@@ -1,3 +1,8 @@
+---
+title: API Reference
+description: Overview of the REST and JSON-RPC APIs, including base paths and document layout.
+---
+
 # API Reference
 
 Base path for REST endpoints is `/v1`. JSON-RPC requests are served on `/rpc`.

@@ -1,3 +1,8 @@
+---
+title: Configuration
+description: Configuration file layout, settings, and sample config.toml.
+---
+
 # Configuration
 
 The service reads `config.toml` by default. You can override the path with the `CONFIG_PATH` environment variable. The config file supports environment variable interpolation (for example `${DB_HOST}`).

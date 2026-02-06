@@ -1,3 +1,8 @@
+---
+title: Transactions
+description: Submit and query transactions, including request/response shapes and behavior.
+---
+
 # Transactions
 
 ## Submit Transactions (Batch)

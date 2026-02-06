@@ -1,3 +1,8 @@
+---
+title: Common Types
+description: Shared API types like transaction status and the TxInfo schema.
+---
+
 # Common Types
 
 ## Transaction Status

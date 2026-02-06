@@ -1,3 +1,8 @@
+---
+title: JSON-RPC
+description: JSON-RPC eth_sendRawTransaction request/response formats and error codes.
+---
+
 # JSON-RPC
 
 ## Submit Raw Transaction

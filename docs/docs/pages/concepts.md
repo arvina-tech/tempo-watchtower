@@ -1,3 +1,8 @@
+---
+title: Concepts
+description: Core concepts including delivery semantics, grouping, nonce keys, and validity.
+---
+
 # Concepts
 
 ## Delivery Semantics

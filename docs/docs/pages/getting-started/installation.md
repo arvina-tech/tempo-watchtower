@@ -1,3 +1,8 @@
+---
+title: Installation
+description: Install prebuilt binaries or build Tempo Watchtower from source.
+---
+
 # Installation
 
 See the Dependencies page for required services and optional components like a reverse proxy or supervisor.
