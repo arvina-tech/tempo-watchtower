@@ -39,11 +39,15 @@ jobs:
         run: npm run build
         working-directory: docs
 
+      - name: Package Pages artifact
+        run: |
+          tar --dereference --hard-dereference -cf "${RUNNER_TEMP}/github-pages.tar" -C docs/docs/dist .
+
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          include-hidden-files: true
-          path: docs/docs/dist
+          name: github-pages
+          path: ${{ runner.temp }}/github-pages.tar
 
   deploy:
     needs: build
