@@ -1,8 +1,8 @@
 [package]
-name = "tempo-watchtower"
+name = "temprano-watchtower"
 version = "0.2.7"
 edition = "2024"
-default-run = "tempo-watchtower"
+default-run = "temprano-watchtower"
 
 [dependencies]
 anyhow = "1.0"

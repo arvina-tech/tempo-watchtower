@@ -14,7 +14,7 @@ Returns service status, version, and runtime/config details. If Redis or Postgre
 ```json
 {
   "status": "ok",
-  "service": "tempo-watchtower",
+  "service": "temprano-watchtower",
   "version": "0.2.6",
   "build": {
     "gitSha": "abc123",

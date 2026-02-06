@@ -17,7 +17,7 @@ export default defineConfig({
     {
       icon: "github",
       label: "GitHub",
-      link: "https://github.com/arvina-tech/tempo-watchtower",
+      link: "https://github.com/arvina-tech/temprano-watchtower",
     },
   ],
   sidebar: [

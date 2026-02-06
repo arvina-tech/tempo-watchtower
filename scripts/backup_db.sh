@@ -38,7 +38,7 @@ BACKUP_DIR="$HOME/db-backup/backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/backup_${TIMESTAMP}.dump"
 ENCRYPTED_FILE="${BACKUP_FILE}.gpg"
-S3_BUCKET="tempo-watchtower-backups"
+S3_BUCKET="temprano-watchtower-backups"
 GPG_RECIPIENT="security@temprano.io"
 
 # Create backup directory if it doesn't exist

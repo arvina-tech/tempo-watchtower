@@ -3,20 +3,20 @@ set -eo pipefail
 
 # The content of the script is largely borrowed from foundryup
 
-OUTPUT_FILE="$PWD/tempo-watchtower"
+OUTPUT_FILE="$PWD/temprano-watchtower"
 
-GITHUB_RELEASE_BASE_URL="https://github.com/arvina-tech/tempo-watchtower/releases/download/%s"
+GITHUB_RELEASE_BASE_URL="https://github.com/arvina-tech/temprano-watchtower/releases/download/%s"
 
 tolower() {
   echo "$1" | awk '{print tolower($0)}'
 }
 
 latest_release() {
-  curl -s https://api.github.com/repos/arvina-tech/tempo-watchtower/releases/latest | grep -i "tag_name" | awk -F '"' '{print $4}'
+  curl -s https://api.github.com/repos/arvina-tech/temprano-watchtower/releases/latest | grep -i "tag_name" | awk -F '"' '{print $4}'
 }
 
 say() {
-  printf "tempo-watchtower: %s\n" "$1"
+  printf "temprano-watchtower: %s\n" "$1"
 }
 
 warn() {
@@ -123,17 +123,17 @@ main() {
     err "macOS is only supported on arm64 architecture"
   fi
 
-  BASE_URL="$(printf $GITHUB_RELEASE_BASE_URL $(latest_release))/tempo-watchtower-%s.tar.gz"
+  BASE_URL="$(printf $GITHUB_RELEASE_BASE_URL $(latest_release))/temprano-watchtower-%s.tar.gz"
 
   TEMPO_WATCHTOWER_TARGET="$TEMPO_WATCHTOWER_PLATFORM-$TEMPO_WATCHTOWER_ARCHITECTURE"
   URL="$(printf $BASE_URL $TEMPO_WATCHTOWER_TARGET)"
-  TAR_OUTPUT=/tmp/tempo-watchtower.tar.gz
+  TAR_OUTPUT=/tmp/temprano-watchtower.tar.gz
 
   download $URL $TAR_OUTPUT
 
-  tar -C /tmp -xzf $TAR_OUTPUT tempo-watchtower
+  tar -C /tmp -xzf $TAR_OUTPUT temprano-watchtower
 
-  mv /tmp/tempo-watchtower $OUTPUT_FILE
+  mv /tmp/temprano-watchtower $OUTPUT_FILE
   rm $TAR_OUTPUT
   echo "Temprano Watchtower binary has been installed to $OUTPUT_FILE"
 }

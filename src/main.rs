@@ -11,13 +11,13 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use tempo_watchtower::config::Config;
-use tempo_watchtower::rpc::RpcManager;
-use tempo_watchtower::state::AppState;
-use tempo_watchtower::{api, db, scheduler, watcher};
+use temprano_watchtower::config::Config;
+use temprano_watchtower::rpc::RpcManager;
+use temprano_watchtower::state::AppState;
+use temprano_watchtower::{api, db, scheduler, watcher};
 
 #[derive(Debug, Parser)]
-#[command(name = "tempo-watchtower", version)]
+#[command(name = "temprano-watchtower", version)]
 struct Cli {
     #[arg(
         long,

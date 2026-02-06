@@ -16,15 +16,15 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-use tempo_watchtower::api;
-use tempo_watchtower::config::{
+use temprano_watchtower::api;
+use temprano_watchtower::config::{
     ApiConfig, BroadcasterConfig, Config, DatabaseConfig, RedisConfig, RpcConfig, SchedulerConfig,
     ServerConfig, WatcherConfig,
 };
-use tempo_watchtower::db;
-use tempo_watchtower::rpc::RpcManager;
-use tempo_watchtower::scheduler;
-use tempo_watchtower::state::AppState;
+use temprano_watchtower::db;
+use temprano_watchtower::rpc::RpcManager;
+use temprano_watchtower::scheduler;
+use temprano_watchtower::state::AppState;
 
 static E2E_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
@@ -406,7 +406,7 @@ async fn rpc_handler(
             state.current_nonce.load(Ordering::SeqCst)
         )),
         "eth_getTransactionReceipt" => Value::Null,
-        "web3_clientVersion" => Value::from("tempo-watchtower-test"),
+        "web3_clientVersion" => Value::from("temprano-watchtower-test"),
         _ => Value::Null,
     };
 
